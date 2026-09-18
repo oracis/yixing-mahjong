@@ -2,6 +2,13 @@
 
 零依赖单文件 HTML5 宜兴麻将游戏：1 个真人玩家 + 3 个 AI 对手。双击即玩，无需安装任何东西。
 
+## 在线试玩
+
+**https://mj.ydtgo.top/**
+
+部署在阿里云 OSS（香港桶 `yixing-mahjong-hk`），已绑定自定义域名并启用 HTTPS。
+`master` 分支每次 push 会自动同步到 OSS，见 `.github/workflows/deploy.yml`。
+
 ## 为什么做它
 
 网上的麻将游戏要么是日麻规则、要么是简化到没有灵魂的通用规则，**没有一款按宜兴本地花数规则打**。
