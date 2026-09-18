@@ -612,12 +612,14 @@ const MahjongGame = (function(){
     nextPlayer(p){ return (p+1)%4; }
 
     // 摸一张有效牌（花牌自动亮出计花并补牌）
+    // 注意：排序放在最底层这里——上层 drawTile / 发牌都走它，避免再出现"某条路径忘了排序"
     drawTo(p){
       while (true){
         const t=this.wall.pop();
         if (!t) return null;
         if (T.isFlower(t)){ this.flowers[p].push(t); continue; }
         this.hands[p].push(t);
+        this.sortHand(p);
         return t;
       }
     }
@@ -678,27 +680,37 @@ const MahjongGame = (function(){
       return opts;
     }
 
+    // 从手牌移除 n 张指定牌，并立即重新排序（所有副露的唯一出口）
+    _removeFromHand(p,tile,n){
+      for (let k=0;k<n;k++){
+        const i=this.hands[p].indexOf(tile);
+        if (i<0) break;
+        this.hands[p].splice(i,1);
+      }
+      this.sortHand(p);
+    }
+
     doPeng(p,tile){
-      for (let k=0;k<2;k++) this.hands[p].splice(this.hands[p].indexOf(tile),1);
+      this._removeFromHand(p,tile,2);
       this.melds[p].push({type:'peng',tiles:[tile,tile,tile]});
     }
     doMingGang(p,tile){
-      for (let k=0;k<3;k++) this.hands[p].splice(this.hands[p].indexOf(tile),1);
+      this._removeFromHand(p,tile,3);
       this.melds[p].push({type:'gang',tiles:[tile,tile,tile,tile]});
     }
     doAnGang(p,tile){
-      for (let k=0;k<4;k++) this.hands[p].splice(this.hands[p].indexOf(tile),1);
+      this._removeFromHand(p,tile,4);
       this.melds[p].push({type:'angang',tiles:[tile,tile,tile,tile]});
     }
     doBuGang(p,tile){
       const m=this.melds[p].find(m=>m.type==='peng'&&m.tiles[0]===tile);
       if (!m) return false;
-      this.hands[p].splice(this.hands[p].indexOf(tile),1);
+      this._removeFromHand(p,tile,1);
       m.type='gang';
       return true;
     }
     doChi(p,opt,tile){
-      for (const t of opt) this.hands[p].splice(this.hands[p].indexOf(t),1);
+      for (const t of opt) this._removeFromHand(p,t,1);
       this.melds[p].push({type:'chi',tiles:[...opt,tile]});
       this.lastChi={p, t:tile};
     }
@@ -1041,9 +1053,8 @@ const Controller = (function(){
     game=new Game({});
     if (keepRound){ game.round=keepRound.round; game.dealer=keepRound.dealer; game.renchan=keepRound.renchan; game.scores=keepScores; }
     R.setTip('宜兴麻将 · 花数规则');
-    // 发牌
+    // 发牌（drawTo 内部已自动排序，无需再单独排一次）
     for (let r=0;r<13;r++) for (let p=0;p<4;p++) game.drawTo(p);
-    for (let p=0;p<4;p++) game.sortHand(p);   // 发牌后按花色+大小归类
     game.currentPlayer=game.dealer;
     game.state=STATE.DRAW;
     R.renderAll(game,ui);
