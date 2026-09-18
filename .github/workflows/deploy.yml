@@ -1,0 +1,35 @@
+name: Deploy to OSS
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # Least-privilege: the OSS_ACCESS_KEY_* secret is a RAM sub-account
+    # scoped to bucket yixing-mahjong-hk only (see scripts/setup_ram_tmp.py, run once).
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install oss2
+
+      - name: Upload to Aliyun OSS
+        run: python scripts/deploy_oss.py --file index.html
+        env:
+          OSS_ACCESS_KEY_ID: ${{ secrets.OSS_ACCESS_KEY_ID }}
+          OSS_ACCESS_KEY_SECRET: ${{ secrets.OSS_ACCESS_KEY_SECRET }}
+          OSS_BUCKET: ${{ vars.OSS_BUCKET }}
+          OSS_REGION: ${{ vars.OSS_REGION }}
+
+      - name: Verify public access
+        run: python scripts/deploy_oss.py --verify
+        env:
+          OSS_BUCKET: ${{ vars.OSS_BUCKET }}
+          OSS_REGION: ${{ vars.OSS_REGION }}
