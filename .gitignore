@@ -1,0 +1,19 @@
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp files
+*.tmp
+*.swp
+
+# WorkBuddy temp
+_check.js
+_test.js
+_t.js
+_t2.js
+_t3.js
+_dbg.js
+_out.txt
