@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>宜兴麻将 · 手机端排版预览</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{ --bg:#0f1a16; --line:#264139; --txt:#d7e5dd; --gold:#f0c96a; }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{
+    background:var(--bg); color:var(--txt);
+    font-family:"PingFang SC","Microsoft YaHei",sans-serif;
+    padding:20px 18px 40px;
+  }
+  h1{ font-size:19px; color:var(--gold); letter-spacing:2px; margin-bottom:6px; }
+  .lead{ font-size:13px; line-height:1.8; color:#9fb3a8; margin-bottom:18px; max-width:900px; }
+  .lead b{ color:var(--gold); font-weight:600; }
+  .row{ display:flex; flex-wrap:wrap; gap:22px; align-items:flex-start; }
+  .dev{ text-align:center; }
+  .dev .cap{ font-size:12px; color:#9fb3a8; margin-bottom:8px; }
+  .dev .cap b{ color:var(--txt); }
+  .frame{
+    position:relative; border:2px solid var(--line); border-radius:26px;
+    background:#000; overflow:hidden; box-shadow:0 8px 24px rgba(0,0,0,.5);
+  }
+  .frame.ls{ border-radius:18px; }
+  .frame iframe{ border:0; display:block; transform-origin:top left; }
+  .hint{ margin-top:22px; font-size:12px; color:#7f948a; line-height:1.9; }
+  .hint code{ background:#16241e; padding:1px 5px; border-radius:4px; color:#b9d3c6; }
+</style>
+</head>
+<body>
+<h1>手机端排版预览</h1>
+<p class="lead">
+  下面每个框都是真实运行的 <b>index.html</b>（iframe 尺寸 = 设备逻辑像素，再用 transform 等比缩小以便同屏对比）。
+  <code>#auto&amp;fill=N</code> 会自动开局并给四家各灌 N 张弃牌，用来直接看最挤的样子。
+  重点看五件事：<b>① 南北两家都在（不再被隐藏）</b> · <b>② 自己 14 张手牌一行放得下</b> ·
+  <b>③ 四家弃牌都在中央牌河里</b> · <b>④ 中央放大显示「谁打出了什么」</b> ·
+  <b>⑤ 长按手牌会弹出放大条</b>。
+</p>
+
+<div class="row" id="row"></div>
+
+<p class="hint">
+  改完 <code>index.html</code> 后刷新本页即可（若浏览器缓存了 iframe，按 Ctrl+F5）。<br>
+  真机验证：把 <code>index.html</code> 传到手机或用局域网地址打开，横竖屏各转一次。
+</p>
+
+<script>
+const DEVICES = [
+  { name:'小屏 竖 · 常规',  w:360, h:640, hash:'#auto&fill=20' },
+  { name:'小屏 竖 · 后期',  w:360, h:640, hash:'#auto&fill=26', ls:false, late:true },
+  { name:'iPhone 12/13 竖 · 常规', w:390, h:844, hash:'#auto&fill=20' },
+  { name:'iPhone 12/13 竖 · 后期', w:390, h:844, hash:'#auto&fill=26', late:true },
+  { name:'iPhone 14PM 竖 · 后期',  w:430, h:932, hash:'#auto&fill=26', late:true },
+  { name:'iPhone 12 横',    w:844, h:390, hash:'#auto&fill=20', ls:true },
+  { name:'iPhone SE 横',    w:667, h:375, hash:'#auto&fill=20', ls:true },
+];
+const MAXH = 700;
+const row = document.getElementById('row');
+for (const d of DEVICES) {
+  const s = Math.min(1, MAXH / d.h, 460 / d.w);
+  const dev = document.createElement('div');
+  dev.className = 'dev';
+  const cap = document.createElement('div');
+  cap.className = 'cap';
+  cap.innerHTML = '<b>' + d.name + '</b><br>' + d.w + '×' + d.h + ' · ×' + s.toFixed(2)
+    + (d.late ? ' · <span style="color:#e0a870">弃牌自动缩档</span>' : '');
+  const frame = document.createElement('div');
+  frame.className = 'frame' + (d.ls ? ' ls' : '');
+  frame.style.width = (d.w * s) + 'px';
+  frame.style.height = (d.h * s) + 'px';
+  const f = document.createElement('iframe');
+  f.src = 'index.html' + d.hash;
+  f.width = d.w; f.height = d.h;
+  f.style.transform = 'scale(' + s + ')';
+  frame.appendChild(f);
+  dev.appendChild(cap); dev.appendChild(frame);
+  row.appendChild(dev);
+}
+</script>
+</body>
+</html>

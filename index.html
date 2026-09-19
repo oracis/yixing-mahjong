@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>宜兴麻将 · 花数规则版</title>
 <style>
   :root{
@@ -10,12 +10,31 @@
     --tile:#faf6ea; --tile-edge:#d8cfb8; --tile-text:#3a3226;
     --accent:#e8c15a; --red:#c0392b; --gold:#f0c96a;
     --panel:rgba(0,0,0,.28);
-    /* 牌尺寸集中在这里，断点内只改这几个变量。
-       弃牌区（.discard-area .tile.mini）在此基础上升一号，见下方「弃牌区」注释。
+    /* 牌尺寸集中在这里，断点内只改「宽度」基准值。
+       所有高度都用 --tile-ar 从宽度算出来，这样无论屏幕多窄，牌面比例都不会变形
+       （旧版把宽高分别写死，窄屏被 flex 挤压后宽高比从 0.71 掉到 0.52，牌面糊成一团）。
        注意：这些变量必须留在本块内——scripts/gen_tiles_preview.py 只读取第一个 :root。 */
-    --tile-w:42px;  --tile-h:58px;
-    --small-w:30px; --small-h:42px;
-    --mini-w:22px;  --mini-h:30px;
+    --tile-ar:1.381;                                              /* 58 / 42，牌面宽高比 */
+    --tile-w:42px;  --tile-h:calc(var(--tile-w) * var(--tile-ar));
+    --small-w:30px; --small-h:calc(var(--small-w) * var(--tile-ar));
+    --mini-w:30px;  --mini-h:calc(var(--mini-w) * var(--tile-ar));
+    /* 上下家那一列只放「信息条+牌背+弃牌」，给死宽度；
+       剩下的全部给中间那条 —— 对家/自己的弃牌带就在中间，
+       越宽就越少折行，也就越不吃高度（横屏最缺的正是高度）。 */
+    --side-w:104px;
+    /* 对手牌背。对家横排，你看得到牌背的宽面，所以按牌的比例叠；
+       上下家竖排，你看到的是牌的侧棱，所以画成一叠薄片——更接近真麻将的观感。
+       ⚠ 这两样都不能占独立列：竖屏宽度是手牌唯一的敌人（见 --hand-w）。 */
+    --back-w:30px;  --back-h:calc(var(--back-w) * var(--tile-ar)); --back-step:19px;
+    --sback-w:24px; --sback-h:9px;
+    --hand-gap:3px;
+    /* 手牌一行必须塞下 14 张：左右各 6px 内边距 + 13 个间隙 = 51px。
+       用 min() 保证既不超过基准档，也永不溢出、永不被压扁。 */
+    --hand-w:min(var(--tile-w), calc((100vw - 51px) / 14));
+    --hand-h:calc(var(--hand-w) * var(--tile-ar));
+    --zoom-w:42px;  --zoom-h:calc(var(--zoom-w) * var(--tile-ar));
+    /* 中央放大的「最后一张弃牌」。竖屏弃牌只有 26px 宽，靠牌河看不清这张 */
+    --ld-w:min(64px, 18vw);
   }
   *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
   html,body{height:100%;}
@@ -55,43 +74,150 @@
   }
   #start-btn:active{ transform:scale(.98); }
 
-  /* ---------- 对局布局 ---------- */
+  /* ---------- 对局布局 ----------
+     一套 DOM + 一个 CSS Grid，横竖屏通吃：
+       ① 对家信息条 + 暗牌             （整行）
+       ② 上家暗牌列 │ 中央共享牌河 │ 下家暗牌列
+       ③ 操作按钮
+       ④ 自己的手牌（永远在最底一行）
+     四家弃牌全部落进 #river 的四个格子，不再各家一堵墙 ——
+     竖屏根本没有宽度摆四个独立弃牌墙，四角分散也会让视线来回跳。 */
   #game-container{ position:fixed; inset:0; display:none; }
   #topbar{
-    position:absolute; top:0; left:0; right:0; height:44px; display:flex; align-items:center;
-    gap:12px; padding:0 12px; background:rgba(0,0,0,.30); z-index:5; font-size:13px;
+    position:absolute; top:0; left:0; right:0; z-index:5;
+    height:44px; height:calc(44px + env(safe-area-inset-top,0px));
+    display:flex; align-items:center; gap:12px;
+    padding:0 12px; padding-top:env(safe-area-inset-top,0px);
+    background:rgba(0,0,0,.30); font-size:13px;
   }
   #topbar .spacer{flex:1;}
   #topbar .icon-btn{ background:none;border:none;color:#eee;font-size:18px;cursor:pointer;padding:4px 6px;}
   #round-label,#turn-label,#wall-count{ white-space:nowrap; }
   #turn-label b{ color:var(--gold); }
 
-  .area{ position:absolute; display:flex; flex-direction:column; align-items:center; gap:6px; z-index:2;}
-  #area-south{ bottom:8px; left:50%; transform:translateX(-50%); width:100%; }
-  #area-north{ top:52px; left:50%; transform:translateX(-50%); }
-  #area-east{ right:6px; top:50%; transform:translateY(-50%); }
-  #area-west{ left:6px; top:50%; transform:translateY(-50%); }
+  /* ---------- 桌面网格 ---------- */
+  #table{
+    position:absolute; left:0; right:0; bottom:0; z-index:2;
+    top:44px; top:calc(44px + env(safe-area-inset-top,0px));
+    display:grid; gap:4px;
+    padding:4px 6px calc(6px + env(safe-area-inset-bottom,0px));
+    padding-left:calc(6px + env(safe-area-inset-left,0px));
+    padding-right:calc(6px + env(safe-area-inset-right,0px));
+    grid-template-columns:minmax(0,1fr);
+    grid-template-rows:auto auto minmax(0,1fr) auto auto;
+    grid-template-areas:
+      "north"
+      "nback"
+      "river"
+      "acts"
+      "hand";
+  }
+  #area-north { grid-area:north; }
+  #backs-north{ grid-area:nback; }
+  #river      { grid-area:river; }
+  #action-bar { grid-area:acts; }
+  #area-south { grid-area:hand; }
 
-  .player-label{
+  #area-north,#area-south{
+    display:flex; flex-direction:column; align-items:center; gap:3px; min-width:0;
+  }
+  .seat-row{ display:flex; align-items:center; justify-content:center; gap:8px; flex-wrap:wrap; min-width:0; }
+
+  .seat-head{
     display:flex; align-items:center; gap:8px; background:var(--panel);
-    padding:3px 12px; border-radius:20px; font-size:13px;
+    padding:3px 12px; border-radius:20px; font-size:13px; white-space:nowrap;
   }
-  .player-label .score{ color:#8fd3a8; font-weight:700;}
-  .player-label.dealer{ border:1px solid var(--gold); color:var(--gold);}
-  .player-label .flowers-tag{ color:#f3a6c1; font-size:12px;}
+  .seat-head .score{ color:#8fd3a8; font-weight:700;}
+  .seat-head.dealer{ border:1px solid var(--gold); color:var(--gold);}
+  .seat-head .flowers-tag{ color:#f3a6c1; font-size:12px;}
+  /* 上下家那两列只有 --side-w 宽，信息条得能折成两行 */
+  .seat-head-mini{
+    flex-wrap:wrap; justify-content:center; gap:2px 4px;
+    padding:2px 4px; border-radius:8px; font-size:10px; width:100%;
+  }
+  .seat-head-mini .score{ width:100%; text-align:center; }
 
-  .hand-area{ display:flex; gap:4px; align-items:flex-end; min-height:66px;}
-  .discard-area{
-    display:flex; flex-wrap:wrap; gap:3px; width:min(300px,42vw); justify-content:center;
-    background:rgba(0,0,0,.18); border-radius:8px; padding:6px; min-height:40px;
+  /* ---------- 中央共享牌河 ----------
+     四家弃牌全在这里：对家一条横带、自己一条横带，上下家各占一竖列。
+     上下家的「信息条 + 副露 + 手牌背」也塞进他们那一列 —— 这样手牌区能独占
+     整屏宽度（竖屏宽度全给手牌，否则 14 张牌分不到 20px）。 */
+  #river{
+    display:grid; gap:3px; min-width:0; min-height:0;
+    grid-template-columns:minmax(0,var(--side-w)) minmax(0,1fr) minmax(0,var(--side-w));
+    /* 上下两条弃牌带按内容长（牌多了自然变高），富余高度全给中间那格。
+       试过反过来（两条带 1fr），空白只是被摊成两处、还让弃牌被迫贴边，更难看。 */
+    grid-template-rows:minmax(0,auto) minmax(0,1fr) minmax(0,auto);
+    /* 上下家那两格跨满整条牌河（竖屏 567px / 横屏只有 ~140px，不跨满放不下） */
+    grid-template-areas:
+      "rw rn re"
+      "rw rc re"
+      "rw rs re";
   }
-  .meld-area{ display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
+  .rz{
+    background:rgba(0,0,0,.18); border-radius:8px; padding:3px;
+    min-width:0; min-height:0; overflow:hidden;
+    display:flex; flex-direction:column; align-items:center; gap:2px;
+  }
+  .rz-n{ grid-area:rn; } .rz-w{ grid-area:rw; }
+  .rz-c{ grid-area:rc; justify-content:center; gap:6px; }   /* 中央块整体居中，别贴顶 */
+  .rz-e{ grid-area:re; } .rz-s{ grid-area:rs; }
+
+  /* 四家统一 flex-end：空间不够时从顶部溢出被裁，裁掉的是最旧的牌。
+     反过来（flex-start 裁掉最新的牌）是最坏情况——你最需要看到刚打的那张。 */
+  .discard-area{
+    display:flex; flex-wrap:wrap; gap:2px; justify-content:center; align-content:flex-end;
+    width:100%; flex:1 1 auto; min-height:0; overflow:hidden;
+  }
+  /* 上下家的弃牌要转 90°。旋转后视觉尺寸和布局尺寸对不上，
+     所以外面套一层 .rv 承接旋转后的占位，否则 flex 会按未旋转的宽高排布、留出空洞。
+     （尺寸见下方 #river .rv —— 要跟着 --mini-scale 走，不能写在这里） */
+  .rv{ flex:0 0 auto; display:flex; align-items:center; justify-content:center; }
+  .rv .tile{ transform:rotate(90deg); }
+
+  /* 后期（每家 >22 张弃牌）牌河自动缩一档：两条弃牌带一多折两行，
+     就会把中央那张「最后打出」挤没。宁可牌小一点，也不能丢信息。
+     用**倍率**而不是写死尺寸，这样能跟着各断点档位一起缩；
+     横屏（h≤600）本来就放得下，别跟着缩。
+     ⚠ 单位换算必须写在「用的时候」：--mini-h 是在 :root 上算好的，
+       继承下来是算完的值，只改 --mini-w 对它没有任何影响。 */
+  #river .tile.mini{
+    width:calc(var(--mini-w) * var(--mini-scale,1));
+    height:calc(var(--mini-w) * var(--mini-scale,1) * var(--tile-ar));
+  }
+  #river .rv{
+    width:calc(var(--mini-w) * var(--mini-scale,1) * var(--tile-ar));
+    height:calc(var(--mini-w) * var(--mini-scale,1));
+  }
+  @media (min-height:601px){ #river.tight{ --mini-scale:.78; } }
+
+  .hand-wrap{ position:relative; display:flex; justify-content:center; }
+  /* touch-action:none 让长按拖动时浏览器不要插手手势（页面本身不滚动） */
+  .hand-area{ display:flex; gap:var(--hand-gap); align-items:flex-end; touch-action:none; }
+  .hand-area .tile{ width:var(--hand-w); height:var(--hand-h); border-radius:5px; }
+
+  /* ---------- 长按手牌 → 放大条 ---------- */
+  #hand-zoom{
+    position:absolute; bottom:calc(100% + 8px); left:50%; transform:translateX(-50%);
+    width:min(calc(100vw - 12px), 640px); display:none; z-index:12;
+    background:rgba(0,0,0,.74); border:1px solid rgba(240,201,106,.45);
+    border-radius:12px; padding:6px; box-shadow:0 6px 18px rgba(0,0,0,.5);
+  }
+  #hand-zoom.show{ display:block; }
+  .zoom-strip{ display:flex; gap:4px; overflow-x:auto; overflow-y:hidden; scrollbar-width:none; }
+  .zoom-strip::-webkit-scrollbar{ display:none; }
+  .zoom-cell{ flex:0 0 auto; padding:2px; border-radius:6px; }
+  .zoom-cell .tile{ width:var(--zoom-w); height:var(--zoom-h); }
+  .zoom-cell.hot{ background:rgba(240,201,106,.28); outline:1px solid var(--gold); }
+
+  .meld-area{ display:flex; gap:6px; flex-wrap:wrap; justify-content:center; }
   .meld-group{ display:flex; gap:1px; background:rgba(0,0,0,.25); border-radius:6px; padding:2px; }
   .meld-group.closed{ outline:2px dashed rgba(255,255,255,.35); }
-  .flower-pile{ display:flex; gap:2px; flex-wrap:wrap; justify-content:center; max-width:180px;}
+  .side-melds{ flex-direction:column; align-items:center; gap:3px; }
+  .side-melds .meld-group{ flex-direction:column; }
+  .flower-pile{ display:flex; gap:2px; flex-wrap:wrap; justify-content:center; }
   .flower-chip{
-    width:20px;height:20px;border-radius:5px;background:#f7dbe6;color:#b03a68;
-    font-size:11px;display:flex;align-items:center;justify-content:center;
+    width:18px;height:18px;border-radius:5px;background:#f7dbe6;color:#b03a68;
+    font-size:10px;display:flex;align-items:center;justify-content:center;
     box-shadow:0 1px 2px rgba(0,0,0,.4);
   }
 
@@ -113,51 +239,33 @@
   .tile.mini{ width:var(--mini-w);height:var(--mini-h); border-radius:4px; box-shadow:0 1px 0 var(--tile-edge),0 1px 2px rgba(0,0,0,.4);}
   .tile.mini .face{ padding:1px; }
 
-  /* 弃牌区：区域不变，只把牌面放大一号，读数优先。
-     gap 同步收紧，避免行数变多后弃牌墙堆太高。
-     注意：只在 ≥621px 生效。手机端弃牌区宽度只有 46vw，
-     牌一放大就会多折出一行（实测 4~5 行、188px 高），
-     直接把操作按钮压住，所以手机上维持原尺寸。 */
-  @media (min-width:621px){
-    .discard-area{ gap:2px; }
-    .discard-area .tile.mini{
-      width:calc(var(--mini-w) + 4px);
-      height:calc(var(--mini-h) + 6px);
-    }
-    #area-east .discard-area .tile.mini,
-    #area-west .discard-area .tile.mini{
-      width:calc(var(--mini-h) + 6px);   /* 东西两侧的弃牌是横放的，宽高互换 */
-      height:calc(var(--mini-w) + 4px);
-    }
-  }
+  /* 弃牌不再需要「窄屏就多折一行、把按钮压住」的特判了：
+     牌河按网格自适应，行数由内容决定，尺寸只用一份变量控制。 */
+
+  .backs{ display:flex; min-width:0; }
+  .backs-h{ justify-content:center; }
   .tile-back{
-    width:32px;height:44px;border-radius:5px;
+    border-radius:5px; flex:0 0 auto;
     background:repeating-linear-gradient(45deg,#2f7a55 0 4px,#28694a 4px 8px);
     border:1px solid rgba(255,255,255,.25); box-shadow:0 2px 3px rgba(0,0,0,.4);
   }
-  #area-south .tile{ cursor:pointer; transition:transform .12s; }
-  #area-south .tile:hover{ transform:translateY(-6px); }
+  /* 对家：横排重叠。13 张 × 30px 在窄屏排不下，用负 margin 叠起来 */
+  .backs-h .tile-back{
+    width:var(--back-w); height:var(--back-h);
+    margin-left:calc(var(--back-step) - var(--back-w));
+  }
+  .backs-h .tile-back:first-child{ margin-left:0; }
+  /* 上下家：一叠薄片（牌的侧棱）。13 张也只用 ~24px 宽 × ~140px 高。
+     高度不够时优先压缩它——弃牌的信息价值高于牌背的张数 */
+  /* flex-shrink 给到 4：空间不够时牌背先塌，把高度让给弃牌
+     （你要看的是「他打了什么」，不是「他还有几张」） */
+  .backs-v{ flex:0 4 auto; min-height:0; overflow:hidden; flex-direction:column; align-items:center; gap:2px; }
+  .backs-v .tile-back{ width:var(--sback-w); height:var(--sback-h); border-radius:2px; }
 
-  /* ---------- 东西两侧：暗牌竖向叠放，弃牌区放在手牌内侧 ---------- */
-  #area-east .hand-area, #area-west .hand-area{
-    flex-direction:column; align-items:center; gap:3px;
-    min-width:40px; min-height:auto;
-  }
-  #area-east .tile-back, #area-west .tile-back{
-    width:32px; height:44px; flex:0 0 auto;
-  }
-  #area-east .side-row, #area-west .side-row{
-    display:flex; flex-direction:row; align-items:flex-start; gap:8px;
-  }
-  #area-east .discard-area, #area-west .discard-area{
-    width:auto; min-width:30px; max-width:110px;
-    flex-direction:column; flex-wrap:nowrap; gap:2px;
-    max-height:420px; padding:4px;
-    align-items:center; justify-content:flex-start;
-    background:rgba(0,0,0,.22);
-  }
-  #area-east .discard-area .tile, #area-west .discard-area .tile{
-    transform:rotate(90deg);
+  /* 悬停抬牌只在真有指针的设备上生效，触屏不然会「粘住」 */
+  @media (hover:hover) and (pointer:fine){
+    #area-south .tile{ cursor:pointer; transition:transform .12s; }
+    #area-south .tile:hover{ transform:translateY(-6px); }
   }
 
   .tile.just-drawn{ outline:2px solid var(--gold); }
@@ -165,24 +273,33 @@
   .tile.deal-anim{ animation:dealIn .35s backwards; }
   @keyframes dealIn{ from{ transform:translateY(40px) scale(.6); opacity:0;} to{ transform:none; opacity:1;} }
 
-  /* ---------- 中央信息 ---------- */
+  /* ---------- 中央信息：现在是牌河正中间那一格 ---------- */
   #center-info{
-    position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
-    text-align:center; z-index:1; pointer-events:none;
-    background:rgba(0,0,0,.25); border-radius:14px; padding:12px 22px;
+    text-align:center; pointer-events:none;
+    background:rgba(0,0,0,.25); border-radius:12px; padding:8px 10px;
+    justify-content:center; gap:4px;
   }
-  #dealer-flower{ font-size:12px; color:#f3a6c1; min-height:16px;}
-  #center-info .big{ font-size:15px; color:#cfe0d7;}
+  #dealer-flower{ font-size:11px; color:#f3a6c1; min-height:14px;}
+  /* 目前没有代码往里写内容；空着时别白占 14px（中央每 1px 都是弃牌的地盘） */
+  #dealer-flower:empty{ display:none; min-height:0; }
+  /* 中央牌面：把「刚刚谁打了什么」放大摆中间。
+     竖屏的弃牌只有 26px 宽，光靠牌河看不清；而中央本来就有大片留白，
+     与其空着不如放这块最需要的信息（成熟麻将 UI 也都这么干）。 */
+  #last-discard{ display:flex; flex-direction:column; align-items:center; gap:5px; }
+  #last-discard:empty{ display:none; }
+  #last-discard .who{ font-size:11px; color:#9fb3a8; letter-spacing:1px; }
+  #last-discard .tile{ width:var(--ld-w); height:calc(var(--ld-w) * var(--tile-ar)); }
+  #center-info .big{ font-size:13px; color:#cfe0d7; word-break:break-all;}
   #center-info.win-glow{ animation:glow 1.2s ease-in-out infinite; }
   @keyframes glow{ 0%,100%{ box-shadow:0 0 6px rgba(240,201,106,.4);} 50%{ box-shadow:0 0 26px rgba(240,201,106,.9);} }
 
-  /* ---------- 操作按钮 ---------- */
+  /* ---------- 操作按钮：网格里的独立一行，永远紧贴手牌上方 ---------- */
   #action-bar{
-    position:absolute; bottom:150px; left:50%; transform:translateX(-50%);
-    display:flex; gap:10px; z-index:10;
+    display:flex; gap:8px; justify-content:center; align-items:center;
+    flex-wrap:wrap; z-index:10;
   }
   .action-btn{
-    padding:10px 22px; font-size:16px; font-weight:700; border-radius:10px; border:none;
+    padding:8px 18px; font-size:15px; font-weight:700; border-radius:10px; border:none;
     cursor:pointer; color:#fff; box-shadow:0 3px 6px rgba(0,0,0,.4);
   }
   .action-btn:active{ transform:scale(.95); }
@@ -214,21 +331,108 @@
   #result-score{ font-size:18px; color:#8fd3a8; font-weight:700; margin-bottom:14px;}
   #result-btn{ padding:10px 40px; font-size:16px; background:var(--accent); color:#3a2c07; border:none; border-radius:10px; font-weight:700; cursor:pointer;}
 
-  /* ---------- 响应式 ---------- */
-  @media (max-width:620px){
-    :root{
-      --tile-w:34px;  --tile-h:48px;
-      --mini-w:24px;  --mini-h:33px;   /* 手机上弃牌比原来 16×22 大一圈 */
-    }
-    .hand-area{min-height:52px; gap:3px;}
-    .discard-area{ width:46vw; }
-    #action-bar{ bottom:118px; }
-    #area-east,#area-west{ display:none; }
-    #area-east .discard-area,#area-west .discard-area{ width:30vw;}
+  /* ---------- 点侧列 → 该家弃牌浮层 ----------
+     横屏这个问题调尺寸无解：20 张旋转 90° 的牌叠起来要 480px，
+     而横屏牌河总高只有 ~147px，侧列只能露出最近 8~10 张。只能改交互。 */
+  #peek-modal{
+    position:fixed; inset:0; background:rgba(0,0,0,.62); display:none;
+    align-items:center; justify-content:center; z-index:45;
   }
-  @media (max-width:400px){
-    :root{ --tile-w:30px; --tile-h:42px; --mini-w:22px; --mini-h:30px; }
-    #action-bar{ bottom:104px; }
+  #peek-modal.show{ display:flex; }
+  .peek-card{
+    width:min(94vw,560px); max-height:86vh; overflow:auto;
+    background:linear-gradient(170deg,#1c4433,#123227);
+    border:1px solid rgba(240,201,106,.45); border-radius:14px; padding:14px 16px 18px;
+  }
+  .peek-head{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .peek-title{ font-size:15px; font-weight:700; color:var(--gold); }
+  .peek-close{ flex:0 0 auto; width:32px; height:32px; border:0; border-radius:8px;
+    background:rgba(255,255,255,.12); color:#eaf3ee; font-size:15px; cursor:pointer; }
+  .peek-label{ font-size:12px; color:#9fc2ae; margin:10px 0 6px; }
+  .peek-row{ display:flex; flex-wrap:wrap; gap:4px; align-items:flex-end; }
+  .peek-empty{ font-size:12px; color:#8aa79a; }
+  /* 牌河里的牌已经被 #river .tile.mini 缩过，浮层里要按正常尺寸显示才看得清 */
+  #peek-modal .tile{ width:var(--tile-w); height:var(--tile-h); }
+  #peek-modal .meld-group{ gap:2px; }
+
+  /* 侧列可点：不给提示用户根本不知道底下压着牌／这里能点开 */
+  .rz-w,.rz-e{ cursor:pointer; position:relative; }
+  .rz-w:active,.rz-e:active{ background:rgba(0,0,0,.36); }
+  /* 「看全部」提示并入座位信息条。不要用绝对定位角标：侧列弃牌是
+     flex-end 靠底排，钉在右下角正好压住最新的几张牌——最不该挡的位置。
+     做成信息条里的金色药丸，在列顶不挡任何牌。 */
+  .more-chip{
+    flex:0 0 auto; background:rgba(240,201,106,.92); color:#3a2c07;
+    border-radius:6px; padding:0 4px; font-size:10px; font-weight:700; line-height:14px;
+  }
+
+  /* 侧列固定内容（信息条/副露/牌背）不许被压缩：以前 flex 等比收缩，
+     高度不够时副露被压成半张、牌背挤成细条。空间不够只准裁弃牌。 */
+  .rz-w>.seat-head, .rz-w>.meld-area, .rz-w>.backs,
+  .rz-e>.seat-head, .rz-e>.meld-area, .rz-e>.backs{ flex-shrink:0; }
+
+  /* 弃牌区改按「整行网格」裁切：flex 收缩会把牌拦腰切成半张（用户实测反馈），
+     网格行高=一张牌的高，要么整行显示、要么整行裁掉。
+     侧列单元是旋转后的占位（宽=牌高、高=牌宽），中央两条带是正立牌。
+     ⚠ align-content 必须显式写 end：基类是 flex 的 flex-end，对 grid 是非法值会退化成
+     normal(=start)，那样行块贴顶、裁掉的是**最新**的牌，刚好反了。
+     end 让行块贴底：最新的牌永远完整可见，裁掉的是最旧的。 */
+  .rz-w .discard-area, .rz-e .discard-area{
+    display:grid; flex:1 1 0;
+    grid-template-columns:repeat(auto-fill, calc(var(--mini-w) * var(--mini-scale,1) * var(--tile-ar)));
+    grid-auto-rows:calc(var(--mini-w) * var(--mini-scale,1));
+    justify-content:center; align-content:end;
+  }
+  .rz-n .discard-area, .rz-s .discard-area{
+    display:grid;
+    grid-template-columns:repeat(auto-fill, calc(var(--mini-w) * var(--mini-scale,1)));
+    grid-auto-rows:calc(var(--mini-w) * var(--mini-scale,1) * var(--tile-ar));
+    justify-content:center; align-content:end;
+  }
+  /* 容器高不整除行高时顶端还会剩半行残牌——CSS 表达不了「取整行数」，
+     所以由 JS 量出行高、把高度写成整行数（见 syncOverflowMarks）。
+     写死高度要生效必须 flex-basis:auto，margin-top:auto 让它继续贴底。 */
+  .discard-area.snap{ flex:0 0 auto; margin-top:auto; }
+  /* 中央格被压到放不下「最后打出」（实测要 ~103px）时整块收起，
+     别让它从格子顶漏出半张牌残影 */
+  #center-info.narrow #last-discard{ display:none; }
+  #center-info.tiny #center-tip{ display:none; }
+
+  /* ---------- 响应式 ----------
+     麻将要靠「宽」和「高」两个维度才够看，所以断点同时看 width 和 height
+     （参考 mahjongwind 的断点策略）。手机横屏规则用 orientation 限定，
+     不能用 max-height 裸判——那样矮屏竖屏手机也会被误伤到 --hand-w 公式。 */
+  @media (orientation:landscape) and (max-height:600px){
+    :root{
+      --tile-w:38px; --mini-w:22px;
+      --back-step:17px; --sback-w:22px; --sback-h:8px;
+      --side-w:96px; --back-w:26px;
+      /* 横屏两侧可能有刘海安全区，多留余量（这里 --tile-w 才是真正的上限） */
+      --hand-w:min(var(--tile-w), calc((100vw - 110px) / 14));
+    }
+    #topbar{ height:34px; height:calc(34px + env(safe-area-inset-top,0px)); font-size:12px; gap:8px; }
+    #topbar .icon-btn{ font-size:16px; padding:2px 5px; }
+    #table{ top:34px; top:calc(34px + env(safe-area-inset-top,0px)); gap:3px; }
+    /* 横屏高度是硬约束：中央那格直接压到 0，两条弃牌带平分牌河高度。
+       中央的「最后打出」也随之关掉——它占的正是这里最缺的东西。 */
+    #center-info{ display:none; }
+    #river{ grid-template-rows:minmax(0,1fr) 0px minmax(0,1fr); }
+    .action-btn{ padding:6px 14px; font-size:14px; }
+    .seat-head{ font-size:12px; padding:2px 10px; gap:6px; }
+  }
+  @media (max-width:620px){
+    /* 390/412/430 这一档：弃牌从 25px 放大到 30px（竖屏宽裕，别浪费） */
+    :root{ --tile-w:34px; --mini-w:30px; --back-step:17px; --sback-w:22px; --side-w:96px;
+           --ld-w:min(60px, 17vw); }
+    .seat-head{ font-size:12px; padding:2px 10px; gap:6px; }
+    #center-info .big{ font-size:12px; }
+  }
+  @media (max-width:380px){
+    /* 360 这一档：中央只剩 ~110px，弃牌和侧列都得收一点才放得下「最后打出」 */
+    :root{ --tile-w:30px; --mini-w:26px; --back-step:15px; --sback-w:19px; --sback-h:8px;
+           --side-w:88px; --ld-w:min(48px, 13vw); }
+    .seat-head{ font-size:11px; padding:2px 8px; gap:5px; }
+    .flower-chip{ width:16px; height:16px; font-size:9px; }
   }
 </style>
 </head>
@@ -271,17 +475,59 @@
     <button class="icon-btn" id="btn-restart">↻</button>
   </div>
 
-  <div class="area" id="area-north"></div>
-  <div class="area" id="area-east"></div>
-  <div class="area" id="area-west"></div>
-  <div class="area" id="area-south"></div>
+  <div id="table">
 
-  <div id="center-info">
-    <div id="dealer-flower"></div>
-    <div class="big" id="center-tip">宜兴麻将</div>
+    <div id="area-north">
+      <div class="seat-row">
+        <div class="seat-head" id="head-north"></div>
+        <div class="flower-pile" id="flowers-north"></div>
+        <div class="meld-area" id="melds-north"></div>
+      </div>
+    </div>
+    <div class="backs backs-h" id="backs-north"></div>
+
+    <div id="river">
+      <div class="rz rz-n"><div class="discard-area" id="discard-north"></div></div>
+
+      <div class="rz rz-w" id="seat-west">
+        <div class="seat-head seat-head-mini" id="head-west"></div>
+        <div class="meld-area side-melds" id="melds-west"></div>
+        <div class="backs backs-v" id="backs-west"></div>
+        <div class="discard-area" id="discard-west"></div>
+      </div>
+
+      <div class="rz rz-c" id="center-info">
+        <div id="dealer-flower"></div>
+        <div id="last-discard"></div>
+        <div class="big" id="center-tip">宜兴麻将</div>
+      </div>
+
+      <div class="rz rz-e" id="seat-east">
+        <div class="seat-head seat-head-mini" id="head-east"></div>
+        <div class="meld-area side-melds" id="melds-east"></div>
+        <div class="backs backs-v" id="backs-east"></div>
+        <div class="discard-area" id="discard-east"></div>
+      </div>
+
+      <div class="rz rz-s"><div class="discard-area" id="discard-south"></div></div>
+    </div>
+
+    <div id="action-bar"></div>
+
+    <div id="area-south">
+      <div class="seat-row">
+        <div class="seat-head" id="head-south"></div>
+        <div class="flower-pile" id="flowers-south"></div>
+        <div class="meld-area" id="melds-south"></div>
+      </div>
+      <div class="hand-wrap">
+        <div class="hand-area" id="hand-area"></div>
+        <div id="hand-zoom"></div>
+      </div>
+    </div>
+
   </div>
 
-  <div id="action-bar"></div>
   <div id="message-toast"></div>
 </div>
 
@@ -291,6 +537,19 @@
     <div id="result-detail"></div>
     <div id="result-score"></div>
     <button id="result-btn">下一局</button>
+  </div>
+</div>
+
+<div id="peek-modal">
+  <div class="peek-card">
+    <div class="peek-head">
+      <div class="peek-title" id="peek-title"></div>
+      <button class="peek-close" id="peek-close" aria-label="关闭">✕</button>
+    </div>
+    <div class="peek-label">副露</div>
+    <div class="peek-row" id="peek-melds"></div>
+    <div class="peek-label">弃牌 · <span id="peek-count">0</span> 张</div>
+    <div class="peek-row" id="peek-discards"></div>
   </div>
 </div>
 
@@ -354,54 +613,93 @@ const TileArt = (function(){
   const SERIF = "'Songti SC','SimSun','STSong','Noto Serif CJK SC','Source Han Serif SC',serif";
   const F = 'font-family="' + SERIF + '"';
 
+  /* 三色取自参考图逐像素采样（最饱和 5% 像素的中位色）：
+     藏蓝 #2d3d67 · 深红 #af2b36 · 竹绿 #16663a
+     绿色比参考图的 #2b7c46 略深：条子的描边只有 ~1px，太亮的绿在 42px 牌面上
+     会被抗锯齿糊成浅灰（这正是之前「条子对比不明显」的根因），降明度保可读性。 */
   const COLOR = {
-    dotRing:'#2759a8', dotCore:'#c0392b',
-    bamboo:'#1f7a45', bambooNode:'#c0392b', birdBrown:'#b5651d',
-    manNum:'#1b3b6f', manWan:'#c0392b',
-    wind:'#1b3b6f', red:'#c0392b', green:'#1e7d44', whiteFrame:'#2759a8',
-    flower:'#c2185b'
+    navy:'#2d3d67', red:'#af2b36', green:'#16663a',
+    greenPale:'#e8f2e8',
+    manNum:'#2d3d67', manWan:'#af2b36',
+    wind:'#2d3d67', whiteFrame:'#2d3d67', flower:'#c2185b'
   };
 
-  /* ---------- 饼（筒）：同心圆点阵 ---------- */
+  /* ---------- 饼（筒）：三色同心圆靶心 ----------
+     圆点不是「空心环 + 实心芯」，而是**实心圆挖两道白环**：
+       实心圆 R → 白环 0.63R → 彩环 0.50R → 白环 0.24R → 彩芯 0.13R
+     五个半径比例来自对参考图做「按半径统计彩色像素占比」的剖面测量，
+     比目测copy可靠。位置/半径同样按参考图逐张连通域测量得出。 */
+  const PIN = { B:COLOR.navy, G:COLOR.green, R:COLOR.red };
+  function pinDot(cx,cy,R,key){
+    const c=PIN[key], f=function(k){ return (R*k).toFixed(2); };
+    return `<circle cx="${cx}" cy="${cy}" r="${f(1)}" fill="${c}"/>`+
+           `<circle cx="${cx}" cy="${cy}" r="${f(0.63)}" fill="#fff"/>`+
+           `<circle cx="${cx}" cy="${cy}" r="${f(0.50)}" fill="${c}"/>`+
+           `<circle cx="${cx}" cy="${cy}" r="${f(0.24)}" fill="#fff"/>`+
+           `<circle cx="${cx}" cy="${cy}" r="${f(0.13)}" fill="${c}"/>`;
+  }
+  // 每点 = [x, y, 色, 半径?]；不给半径就用该牌的默认 R
   const DOT_LAYOUT = {
-    1:{r:21, pts:[[50,69]]},
-    2:{r:16.5,pts:[[50,40],[50,98]]},
-    3:{r:14.5,pts:[[24,101],[50,69],[76,37]]},
-    4:{r:14.5,pts:[[31,41],[69,41],[31,97],[69,97]]},
-    5:{r:13.5,pts:[[31,40],[69,40],[50,69],[31,98],[69,98]]},
-    6:{r:13,  pts:[[31,33],[69,33],[31,69],[69,69],[31,105],[69,105]]},
-    7:{r:12,  pts:[[26,30],[50,30],[74,30],[31,73],[69,73],[31,113],[69,113]]},
-    8:{r:11.5,pts:[[31,29],[69,29],[31,57],[69,57],[31,86],[69,86],[31,114],[69,114]]},
-    9:{r:11.5,pts:[[25,32],[50,32],[75,32],[25,69],[50,69],[75,69],[25,106],[50,106],[75,106]]}
+    2:{R:17.2,pts:[[50,47,'B'],[50,97,'G']]},
+    3:{R:12.0,pts:[[35,38,'B'],[50,68,'R'],[65,101,'G']]},
+    4:{R:12.3,pts:[[34,36,'G'],[66,36,'B'],[34,102,'B'],[66,102,'G']]},
+    5:{R:12.6,pts:[[36,36,'G'],[64,36,'B'],[50,70,'R'],[36,103,'B'],[64,103,'G']]},
+    6:{R:10.6,pts:[[39,29,'G'],[61,29,'G'],[39,79,'R'],[61,79,'R'],[39,105,'R'],[61,105,'R']]},
+    7:{R:10.9,pts:[[28,26,'G'],[50,36,'G'],[72,46,'G'],
+                   [38,80,'R',12.1],[62,80,'R',12.1],[38,106,'R',12.1],[62,106,'R',12.1]]},
+    8:{R:11.0,pts:[[37,28,'B'],[63,28,'B'],[37,54,'B'],[63,54,'B'],
+                   [37,81,'B'],[63,81,'B'],[37,107,'B'],[63,107,'B']]},
+    9:{R:10.0,pts:[[30,28,'B'],[50,28,'B'],[70,28,'B'],
+                   [30,66,'R'],[50,66,'R'],[70,66,'R'],
+                   [30,104,'G'],[50,104,'G'],[70,104,'G']]}
   };
+  /* 一筒：团花。外藏蓝圈 + 12 瓣浅绿花环 + 中心红盘压白十字 */
+  function pin1(){
+    const cx=50, cy=70, R=34.5;
+    let petals='';
+    for (let i=0;i<12;i++){
+      petals+=`<ellipse cx="${cx}" cy="${(cy-R*0.575).toFixed(1)}" rx="${(R*0.135).toFixed(1)}"`+
+              ` ry="${(R*0.185).toFixed(1)}" fill="${COLOR.greenPale}" stroke="${COLOR.green}"`+
+              ` stroke-width="1.5" transform="rotate(${i*30} ${cx} ${cy})"/>`;
+    }
+    const rr=R*0.40, bar=R*0.075;
+    // 顺序：外圈 → 花瓣 → 白盘 → 红盘 → 白十字（白盘压住花瓣内端，和参考图一致）
+    return `<circle cx="${cx}" cy="${cy}" r="${(R*0.935).toFixed(1)}" fill="none"`+
+             ` stroke="${COLOR.navy}" stroke-width="${(R*0.13).toFixed(1)}"/>`+
+           petals+
+           `<circle cx="${cx}" cy="${cy}" r="${(R*0.47).toFixed(1)}" fill="#fff"/>`+
+           `<circle cx="${cx}" cy="${cy}" r="${rr.toFixed(1)}" fill="${COLOR.red}"/>`+
+           `<rect x="${(cx-bar/2).toFixed(1)}" y="${(cy-rr).toFixed(1)}" width="${bar.toFixed(1)}" height="${(rr*2).toFixed(1)}" fill="#fff"/>`+
+           `<rect x="${(cx-rr).toFixed(1)}" y="${(cy-bar/2).toFixed(1)}" width="${(rr*2).toFixed(1)}" height="${bar.toFixed(1)}" fill="#fff"/>`;
+  }
   function dotsSvg(n){
+    if (n===1) return pin1();
     const L=DOT_LAYOUT[n]; if(!L) return '';
-    return L.pts.map(function(p){
-      const r=L.r;
-      return `<circle cx="${p[0]}" cy="${p[1]}" r="${r}" fill="#fff" stroke="${COLOR.dotRing}" stroke-width="3"/>`+
-             `<circle cx="${p[0]}" cy="${p[1]}" r="${(r*0.44).toFixed(1)}" fill="${COLOR.dotCore}"/>`;
-    }).join('');
+    return L.pts.map(function(p){ return pinDot(p[0],p[1],p[3]||L.R,p[2]); }).join('');
   }
 
   /* ---------- 条（索）：竹节 / 1 条为雀鸟 ----------
-     传统排布：7 条 = 顶行 1 条竖 + 中间 3 条斜 + 底行 3 条竖；
-               8 条 = 第一行 4 条竖 + 第二行 4 条斜（八根一眼可数，不会像 4×2 那样错看成两个大块） */
-  const A = 26;                       // 斜置角度
+     排布全部按参考图连通域实测定值：
+       6 条是 3 列 × 2 行（不是 2 列 × 3 行）；7 条顶部 1 根红竹 + 下方 3×2，
+       中间那列是藏蓝；9 条是 3×3 且**中间一列**为红（筒子九是中间一行为红，两者不同）。*/
   const BAMBOO_LAYOUT = {
-    2:{w:16,h:56, pts:[[36,69,0],[64,69,0]]},
-    3:{w:15,h:40, pts:[[50,36,0],[32,94,0],[68,94,0]]},
-    4:{w:15,h:40, pts:[[31,41,0],[69,41,0],[31,97,0],[69,97,0]]},
-    5:{w:13,h:36, pts:[[29,38,0],[71,38,0],[50,69,0],[29,100,0],[71,100,0]]},
-    6:{w:13,h:30, pts:[[31,32,0],[69,32,0],[31,69,0],[69,69,0],[31,106,0],[69,106,0]]},
-    7:{w:11,h:26, pts:[[50,28,0],[25,62,A],[50,62,A],[75,62,A],[25,110,0],[50,110,0],[75,110,0]]},
-    8:{w:11,h:26, pts:[[25,34,0],[42,34,0],[59,34,0],[76,34,0],
-                       [22,104,A],[39,104,A],[56,104,A],[73,104,A]]},
-    9:{w:11,h:26, pts:[[25,32,0],[50,32,0],[75,32,0],[25,69,0],[50,69,0],[75,69,0],[25,106,0],[50,106,0],[75,106,0]]}
+    2:{w:13.5,h:42, pts:[[50,46,0,'G'],[50,93,0,'G']]},
+    3:{w:11,  h:46, pts:[[50,41,0,'G'],[30,94,0,'G'],[70,94,0,'G']]},
+    4:{w:9.5, h:44, pts:[[35,41,0,'G'],[65,41,0,'G'],[35,100,0,'G'],[65,100,0,'G']]},
+    5:{w:10,  h:45, pts:[[30,37,0,'G'],[70,37,0,'G'],[50,70,0,'R'],[30,103,0,'G'],[70,103,0,'G']]},
+    6:{w:10.5,h:47, pts:[[30,44,0,'G'],[50,44,0,'G'],[70,44,0,'G'],[30,96,0,'G'],[50,96,0,'G'],[70,96,0,'G']]},
+    7:{w:9,   h:32, pts:[[50,25,0,'R'],[30,64,0,'G'],[50,64,0,'B'],[70,64,0,'G'],
+                         [30,102,0,'G'],[50,102,0,'B'],[70,102,0,'G']]},
+    9:{w:10.5,h:34, pts:[[30,28,0,'G'],[50,28,0,'R'],[70,28,0,'G'],
+                         [30,66,0,'G'],[50,66,0,'R'],[70,66,0,'G'],
+                         [30,104,0,'G'],[50,104,0,'R'],[70,104,0,'G']]}
   };
-  function bambooUnit(cx,cy,w,h,deg){
+  function bambooUnit(cx,cy,w,h,deg,key){
     const x=(cx-w/2).toFixed(1), y=(cy-h/2).toFixed(1), x2=(cx+w/2).toFixed(1);
-    const y1=(cy-h*0.20).toFixed(1), y2=(cy+h*0.20).toFixed(1);
-    const M=COLOR.bamboo, sw=Math.max(2, Math.min(w,h)*0.16).toFixed(2);
+    const y1=(cy-h*0.26).toFixed(1), y2=(cy+h*0.26).toFixed(1);
+    // 描边不能太细：牌面 42px 时 SVG 缩放比仅约 0.42，
+    // 低于 3 个 viewBox 单位就会被抗锯齿糊成浅色，凑近看才分辨得出竹节
+    const M=PIN[key]||COLOR.green, sw=Math.max(3, Math.min(w,h)*0.24).toFixed(2);
     const inner=`<g>`+
       `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${(w/2).toFixed(1)}" fill="#fff" stroke="${M}" stroke-width="${sw}"/>`+
       `<line x1="${x}" y1="${y1}" x2="${x2}" y2="${y1}" stroke="${M}" stroke-width="${(sw*0.8).toFixed(2)}"/>`+
@@ -411,29 +709,58 @@ const TileArt = (function(){
     // 斜置：绕自身中心旋转
     return `<g transform="rotate(${deg} ${cx} ${cy})">${inner}</g>`;
   }
+  /* 已知两端点画一根竹：竹节单元是竖直的，绕中心转到目标方向。
+     旋转角推导：SVG 里 (0,1)[向下] 旋转 θ 后为 (-sinθ, cosθ)，
+     要让它对齐 (dx,dy) ⇒ θ = atan2(-dx, dy)。 */
+  function bambooSeg(x1,y1,x2,y2,w,key){
+    const cx=(x1+x2)/2, cy=(y1+y2)/2;
+    const len=Math.sqrt((x2-x1)*(x2-x1)+(y2-y1)*(y2-y1));
+    const deg=Math.atan2(-(x2-x1), (y2-y1))*180/Math.PI;
+    return bambooUnit(cx,cy,w,len,deg,key);
+  }
+  /* 八条：上「W」下「M」，两半各 = 2 根竖竹 + 2 根斜竹，合计正好 8 根可数 */
+  function bamboo8(){
+    const w=10, vh=48, G='G';
+    return [
+      bambooUnit(25,42,w,vh,0,G), bambooUnit(75,42,w,vh,0,G),
+      bambooSeg(25,66,50,20,9,G), bambooSeg(50,20,75,66,9,G),
+      bambooUnit(25,98,w,vh,0,G), bambooUnit(75,98,w,vh,0,G),
+      bambooSeg(25,74,50,120,9,G), bambooSeg(50,120,75,74,9,G)
+    ].join('');
+  }
+  /* 一条：燕子。红冠红喙、白身藏蓝描边+羽纹、右侧翅、红长尾，绿枝叶衬底 */
   function birdSvg(){
-    const g=COLOR.bamboo, r=COLOR.bambooNode, b=COLOR.birdBrown;
+    const G=COLOR.green, B=COLOR.navy, R=COLOR.red, W='#fff';
     return `<g>`+
-      // 身体
-      `<path d="M38 44 C46 34 57 36 60 48 C64 62 57 80 47 84 C37 87 30 81 30 70 C30 60 32 51 38 44 Z" fill="${g}"/>`+
-      // 头 + 眼 + 喙
-      `<circle cx="35" cy="41" r="8.5" fill="${g}"/>`+
-      `<circle cx="32.5" cy="39" r="1.9" fill="#fff"/>`+
-      `<path d="M26.5 41 L17 44.5 L26.5 48 Z" fill="${r}"/>`+
-      // 翅
-      `<path d="M45 57 C55 53 63 57 67 64" stroke="#fff" stroke-width="3.2" fill="none" stroke-linecap="round" opacity=".9"/>`+
-      // 尾羽
-      `<path d="M52 80 C60 85 66 92 68 101" stroke="${g}" stroke-width="3.6" fill="none" stroke-linecap="round"/>`+
-      `<path d="M55 85 C65 89 71 96 73 105" stroke="${g}" stroke-width="2.6" fill="none" stroke-linecap="round" opacity=".65"/>`+
-      // 腿 + 枝
-      `<path d="M42 83 L40 98 M50 83 L53 98" stroke="${b}" stroke-width="2.4" stroke-linecap="round"/>`+
-      `<path d="M35 98 L57 98" stroke="${b}" stroke-width="2.2" stroke-linecap="round"/>`+
+      // 绿枝（衬在鸟后）
+      `<path d="M74 20 C64 36 54 50 40 60 C26 70 17 88 21 110" fill="none" stroke="${G}" stroke-width="3.2" stroke-linecap="round"/>`+
+      `<path d="M21 110 C26 98 36 92 48 92" fill="none" stroke="${G}" stroke-width="3" stroke-linecap="round"/>`+
+      `<path d="M62 38 C72 30 84 33 90 43 C79 47 68 45 62 41 Z" fill="${G}"/>`+
+      // 红色长尾
+      `<path d="M60 68 C70 80 77 95 80 114" fill="none" stroke="${R}" stroke-width="5.5" stroke-linecap="round"/>`+
+      // 身体（白底藏蓝描边）
+      `<path d="M32 44 C42 33 56 36 60 50 C64 65 57 81 45 85 C33 89 25 78 25 64 C25 55 28 49 32 44 Z" fill="${W}" stroke="${B}" stroke-width="3"/>`+
+      // 胸前羽纹
+      `<path d="M36 53 L36 78 M42 51 L42 82 M48 53 L48 79 M54 57 L54 75" stroke="${B}" stroke-width="1.5" opacity=".6"/>`+
+      // 翅（右侧，带格纹）
+      `<path d="M46 47 C60 42 76 46 86 57 C75 62 62 62 50 59 Z" fill="${W}" stroke="${B}" stroke-width="2.6"/>`+
+      `<path d="M52 51 L62 48 M55 57 L68 57 M63 51 L74 53" stroke="${B}" stroke-width="1.3" opacity=".6"/>`+
+      // 头
+      `<circle cx="38" cy="33" r="12" fill="${W}" stroke="${B}" stroke-width="3"/>`+
+      // 冠羽（红）
+      `<path d="M41 23 C45 13 57 8 69 12 C59 19 53 26 51 33 C47 26 44 23 41 23 Z" fill="${R}"/>`+
+      // 喙（红，朝左）
+      `<path d="M27 29 L10 36 L27 43 Z" fill="${R}"/>`+
+      // 眼
+      `<circle cx="35" cy="31" r="3.6" fill="none" stroke="${B}" stroke-width="1.8"/>`+
+      `<circle cx="35" cy="31" r="1.2" fill="${B}"/>`+
       `</g>`;
   }
   function bambooSvg(n){
     if (n===1) return birdSvg();
+    if (n===8) return bamboo8();
     const L=BAMBOO_LAYOUT[n]; if(!L) return '';
-    return L.pts.map(function(p){ return bambooUnit(p[0],p[1],L.w,L.h,p[2]); }).join('');
+    return L.pts.map(function(p){ return bambooUnit(p[0],p[1],L.w,L.h,p[2],p[3]); }).join('');
   }
 
   /* ---------- 万：汉数字 + 萬 ---------- */
@@ -759,7 +1086,7 @@ const MahjongGame = (function(){
       this.round=1; this.renchan=0; this.dealer=0;
       this.currentPlayer=0; this.state=STATE.DRAW;
       this.gameOver=false; this.winner=-1; this.winType=null;
-      this.lastDiscard=null; this.lastDrawWasGang=false; this.afterGang=false;
+      this.lastDiscard=null; this.lastDiscardBy=-1; this.lastDrawWasGang=false; this.afterGang=false;
       this.totalDiscards=0;
       this.lastChi=null;                 // {p, t} 吃后不能打同张
       this.declinedHu=[new Set(),new Set(),new Set(),new Set()];   // 放弃胡张一圈限制
@@ -796,7 +1123,7 @@ const MahjongGame = (function(){
       if (i<0) return false;
       this.hands[p].splice(i,1);
       this.discards[p].push(t);
-      this.lastDiscard=t;
+      this.lastDiscard=t; this.lastDiscardBy=p;
       this.totalDiscards++;
       this.lastChi=null;
       return true;
@@ -1066,44 +1393,221 @@ const Renderer = (function(){
     }
     return fp;
   }
+  /* 座位方位固定：p0 下（自己）、p1 右、p2 上、p3 左。
+     四家的弃牌都落进 #discard-<dir> —— 也就是中央那块共享牌河。 */
+  const SEAT=[['south',false],['east',true],['north',false],['west',true]];
+  let lastGame=null;
+
   function renderAll(game, ui){
+    lastGame=game;
     document.getElementById('wall-count').textContent='余 '+game.wallRemaining();
     document.getElementById('turn-label').innerHTML='轮到：<b>'+WIND[game.currentPlayer]+'</b>';
     document.getElementById('round-label').textContent='第'+game.round+'局'+(game.renchan>0?(' · 连庄×'+game.renchan):'');
-    renderPlayer(game,0,'south',ui);
-    renderPlayer(game,1,'east',ui);
-    renderPlayer(game,2,'north',ui);
-    renderPlayer(game,3,'west',ui);
+    // 后期牌河变密 → 弃牌自动缩一档，给中央留出放「最后打出」的位置
+    const mxDisc=Math.max(game.discards[0].length,game.discards[1].length,
+                          game.discards[2].length,game.discards[3].length);
+    document.getElementById('river').classList.toggle('tight', mxDisc>22);
+    for (let p=0;p<4;p++) renderSeat(game,p,SEAT[p][0],SEAT[p][1],ui);
+    renderCenter(game);
+    bindHandZoom();
+    bindPeek();
+    bindOverflowCheck();
+    syncOverflowMarks();
+    // 浮层开着时游戏还在推进（AI 会继续打牌），内容要跟着刷新
+    if (PEEK.open) peekPlayer(PEEK.p);
   }
-  function renderPlayer(game,p,dir,ui){
-    const area=document.getElementById('area-'+dir);
-    area.innerHTML='';
-    const label=document.createElement('div');
-    label.className='player-label';
-    if (p===game.dealer) label.classList.add('dealer');
-    const personaTag = (p!==0)? AI.personaName(p) : '';
-    const nm=p===0?'你':(WIND[p]+'·AI'+(personaTag?'（'+personaTag+'）':''));
-    label.innerHTML=`<span>${nm}（${WIND[game.seatWind(p)]}）</span>`+
-      `<span class="flowers-tag">花${game.flowers[p].length}</span>`+
-      `<span class="score">${game.scores[p]>=0?'+':''}${game.scores[p]}</span>`;
-    area.appendChild(label);
 
-    // 副露
-    if (game.melds[p].length){
-      const ma=document.createElement('div'); ma.className='meld-area';
-      for (const m of game.melds[p]){
-        const g=document.createElement('div');
-        g.className='meld-group'+(m.type==='angang'?' closed':'');
-        for (const t of m.tiles) g.appendChild(tileEl(t,{mini:true}));
-        ma.appendChild(g);
-      }
-      area.appendChild(ma);
+  /* ---------- 点侧列 → 该家弃牌浮层 ----------
+     横屏调尺寸无解：20 张旋转 90° 的牌叠起来要 480px，横屏牌河只有 ~147px，
+     侧列只能露出最近 8~10 张。改成点一下看全部。
+     竖屏虽然放得下 20 张，也用同一个入口——弃牌只有 30px 宽，认不清时点开看大图。 */
+  const PEEK={ open:false, p:-1 };
+  let peekBound=false;
+  function peekPlayer(p){
+    const game=lastGame; if(!game) return;
+    PEEK.open=true; PEEK.p=p;
+    const g=game;
+    document.getElementById('peek-title').textContent=
+      (p===0?'你':WIND[p]+'·AI'+(AI.personaName(p)?'（'+AI.personaName(p)+'）':''))+
+      ' · '+WIND[g.seatWind(p)]+' · 花'+g.flowers[p].length+
+      ' · '+((g.scores[p]>=0?'+':'')+g.scores[p]);
+
+    const mm=document.getElementById('peek-melds'); mm.innerHTML='';
+    if (!g.melds[p].length) emptyRow(mm,'无');
+    else for (const m of g.melds[p]){
+      const box=document.createElement('div');
+      box.className='meld-group'+(m.type==='angang'?' closed':'');
+      for (const t of m.tiles) box.appendChild(tileEl(t));
+      mm.appendChild(box);
     }
-    // 花牌堆
-    if (game.flowers[p].length) area.appendChild(flowerPile(game,p));
 
+    const dd=document.getElementById('peek-discards'); dd.innerHTML='';
+    document.getElementById('peek-count').textContent=g.discards[p].length;
+    if (!g.discards[p].length) emptyRow(dd,'暂无');
+    else {
+      const lastWin=(g.winner===p && g.lastDiscard);
+      g.discards[p].forEach(t=>dd.appendChild(tileEl(t,{winTile:!!(lastWin&&t===g.lastDiscard)})));
+    }
+    document.getElementById('peek-modal').classList.add('show');
+  }
+  function emptyRow(host,text){
+    const e=document.createElement('div'); e.className='peek-empty';
+    e.textContent=text; host.appendChild(e);
+  }
+  function peekClose(){
+    PEEK.open=false; PEEK.p=-1;
+    document.getElementById('peek-modal').classList.remove('show');
+  }
+  function bindPeek(){
+    if (peekBound) return;      // renderAll 每次都调，事件只能绑一次
+    peekBound=true;
+    document.getElementById('peek-close').addEventListener('click',peekClose);
+    // 点遮罩关闭。判据用 target===currentTarget 而不是比对 id：
+    // 「点在容器本身而非子元素」本就是这个比较的语义，且不依赖元素带 id
+    document.getElementById('peek-modal').addEventListener('click',e=>{
+      if (e.target === e.currentTarget) peekClose();
+    });
+    if (document.addEventListener) document.addEventListener('keydown',e=>{
+      if (e.key==='Escape' && PEEK.open) peekClose();
+    });
+    // p1 → 东（右列 rz-e）；p3 → 西（左列 rz-w），与 SEAT 表一致
+    document.getElementById('seat-east').addEventListener('click',()=>peekPlayer(1));
+    document.getElementById('seat-west').addEventListener('click',()=>peekPlayer(3));
+  }
+
+  /* 中央格：把「刚刚谁打了什么」放大摆中间。
+     竖屏的弃牌只有 26px 宽，光看牌河认不出牌；中央本来就有大片留白，顺手用上。 */
+  function renderCenter(game){
+    const ld=document.getElementById('last-discard');
+    if (!ld) return;
+    ld.innerHTML='';
+    if (game.totalDiscards>0 && game.lastDiscard!=null && game.lastDiscardBy>=0){
+      const who=document.createElement('div'); who.className='who';
+      who.textContent=(game.lastDiscardBy===0?'你':WIND[game.lastDiscardBy])+' 打出';
+      ld.appendChild(who);
+      ld.appendChild(tileEl(game.lastDiscard,{}));
+    }
+  }
+
+  /* 溢出收口：只处理「露半张牌」这类边缘情况，放得下时什么都不做。
+     ① 弃牌区 —— 网格能保证行高固定，但容器高不整除行高时顶端会剩半行残牌
+        （CSS 无法表达"取整行数"）。这里量出行高、把高度写成整行数，
+        于是永远只有「整行显示」或「整行不显示」，不存在半张牌。
+        先删 .snap / 清空 height 还原成 flex:1，才能量到真实可用高度。
+        ⚠ 判断"装不下"不能用 scrollHeight：align-content:end 把多出来的行推到了
+        容器**上方**，负方向的溢出不计入 scrollHeight。得按列数自己算自然高度。
+     ② 中央格太矮 → 收起「最后打出」，否则它会从格子顶漏出半张牌
+        （实测「谁打出 + 一张牌」要 ~103px）。
+     ⚠ 必须在 DOM 更新之后同步读一次布局，才拿得到真实的 clientHeight/offsetHeight。 */
+  function syncOverflowMarks(){
+    const GAP=2;
+    // 用固定 id 而不是 querySelectorAll：只跑 4 次查表，也顺便让自测的 DOM mock 能覆盖到
+    ['north','east','south','west'].forEach(d=>{
+      const el=document.getElementById('discard-'+d);
+      if (!el) return;
+      el.classList.remove('snap');
+      el.style.height='';
+      const first=el.children[0];
+      const rowH=(first && first.offsetHeight)||0;   // mock 没有布局 → 0，直接跳过
+      const avail=el.clientHeight||0;
+      if (!rowH || !avail) return;
+      const cs=(typeof getComputedStyle==='function') ? getComputedStyle(el) : null;
+      const cols=cs ? ((cs.gridTemplateColumns||'').trim().split(/\s+/).filter(Boolean).length||1) : 1;
+      const natural=Math.ceil(el.children.length/cols)*(rowH+GAP)-GAP;
+      // 真机走 natural；DOM mock 没有 getComputedStyle，靠伪造的 scrollHeight 兜底
+      const overflowing = natural>avail+1 || (el.scrollHeight||0)>avail+1;
+      if (!overflowing) return;
+      const rows=Math.max(1, Math.floor((avail+GAP)/(rowH+GAP)));
+      const need=rows*(rowH+GAP)-GAP;
+      // 极端矮（可用高度不足一行）时别收口：写死的高度会顶出容器反被裁
+      if (need>avail) return;
+      el.style.height=need+'px';
+      el.classList.add('snap');
+    });
+    const c=document.getElementById('center-info');
+    if (c){
+      const h=c.clientHeight||0;      // mock/未布局时为 0 → 两个类都不加
+      c.classList.toggle('narrow', h>0 && h<110);
+      c.classList.toggle('tiny',   h>0 && h<44);
+    }
+  }
+  let overflowBound=false;
+  function bindOverflowCheck(){
+    if (overflowBound) return;
+    overflowBound=true;
+    // 拖动窗口/转屏后没有 renderAll，布局会变，得单独跟一次
+    if (typeof window!=='undefined' && window.addEventListener) window.addEventListener('resize',syncOverflowMarks);
+  }
+
+  function renderSeat(game,p,dir,isSide,ui){
+    // ---- 信息条 ----
+    const head=document.getElementById('head-'+dir);
+    head.className='seat-head'+(isSide?' seat-head-mini':'');
+    if (p===game.dealer) head.classList.add('dealer');
+    const wind=WIND[game.seatWind(p)];
+    const personaTag=(p!==0)?AI.personaName(p):'';
+    const nm=p===0?'你':(WIND[p]+'·AI'+(personaTag?'（'+personaTag+'）':''));
+    const sc=(game.scores[p]>=0?'+':'')+game.scores[p];
+    const flowerN='花'+game.flowers[p].length;
+    if (isSide){
+      // 上下家那一列只有牌河的 1/3 宽，折成「风位+花数/看全部/分数」
+      // 有弃牌时亮出金色药丸「▸看全部」：点该列弹浮层（用户反馈 ▸N 太隐晦认不出）
+      const moreChip = game.discards[p].length > 0
+        ? `<span class="more-chip" title="看全部 ${game.discards[p].length} 张弃牌">▸看全部</span>`
+        : '';
+      head.innerHTML=`<span class="nm">${wind}</span>`+
+        `<span class="flowers-tag">${flowerN}</span>`+
+        moreChip+
+        `<span class="score">${sc}</span>`;
+      head.title=nm+'（'+wind+'）'+flowerN+' '+sc;
+    } else {
+      head.innerHTML=`<span>${nm}（${wind}）</span>`+
+        `<span class="flowers-tag">${flowerN}</span>`+
+        `<span class="score">${sc}</span>`;
+    }
+
+    // ---- 副露 ----
+    const ma=document.getElementById('melds-'+dir);
+    ma.innerHTML='';
+    for (const m of game.melds[p]){
+      const g=document.createElement('div');
+      g.className='meld-group'+(m.type==='angang'?' closed':'');
+      for (const t of m.tiles) g.appendChild(tileEl(t,{mini:true}));
+      ma.appendChild(g);
+    }
+
+    // ---- 花牌堆（上下家的信息条塞不下花牌，只报数字） ----
+    const fp=document.getElementById('flowers-'+dir);
+    if (fp){
+      fp.innerHTML='';
+      if (game.flowers[p].length) fp.appendChild(flowerPile(game,p));
+    }
+
+    // ---- 牌背 ----
+    const bk=document.getElementById('backs-'+dir);
+    if (bk){
+      bk.innerHTML='';
+      if (p!==0) for (let k=0;k<game.hands[p].length;k++) bk.appendChild(tileEl(null,{back:true}));
+    }
+
+    // ---- 弃牌 → 中央牌河 ----
+    const dis=document.getElementById('discard-'+dir);
+    dis.innerHTML='';
+    const lastWin=(game.winner===p && game.lastDiscard);
+    game.discards[p].forEach(t=>{
+      const el=tileEl(t,{mini:true, winTile:!!(lastWin&&t===game.lastDiscard)});
+      if (isSide){
+        // 上下家的弃牌要转 90°。外层 .rv 承接旋转后的占位，
+        // 否则 flex 会按未旋转的宽高排布，行间留出空洞
+        const box=document.createElement('div'); box.className='rv';
+        box.appendChild(el); dis.appendChild(box);
+      } else dis.appendChild(el);
+    });
+
+    // ---- 自己的手牌 ----
     if (p===0){
-      const hand=document.createElement('div'); hand.className='hand-area';
+      const hand=document.getElementById('hand-area');
+      hand.innerHTML='';
       const just=game.drawn[0];
       game.hands[0].forEach((t,idx)=>{
         const isJust=(t===just && idx===game.hands[0].length-1);
@@ -1112,35 +1616,89 @@ const Renderer = (function(){
           cls: isJust?'just-drawn':''
         }));
       });
-      area.appendChild(hand);
-      area.appendChild(discardArea(game,p));
-    } else if (p===1 || p===3){
-      // 左右两侧：手牌竖向叠放，弃牌区放在手牌内侧（朝向桌面中心）
-      const back=document.createElement('div'); back.className='hand-area';
-      for (let k=0;k<game.hands[p].length;k++) back.appendChild(tileEl(null,{back:true}));
-      const row=document.createElement('div'); row.className='side-row';
-      if (p===1){ // 右侧（南）：弃牌在左（内侧），手牌在右
-        row.appendChild(discardArea(game,p));
-        row.appendChild(back);
-      } else { // 左侧（北）：手牌在左，弃牌在右（内侧）
-        row.appendChild(back);
-        row.appendChild(discardArea(game,p));
-      }
-      area.appendChild(row);
-    } else {
-      const back=document.createElement('div'); back.className='hand-area';
-      for (let k=0;k<game.hands[p].length;k++) back.appendChild(tileEl(null,{back:true}));
-      area.appendChild(back);
-      area.appendChild(discardArea(game,p));
     }
   }
-  function discardArea(game,p){
-    const da=document.createElement('div'); da.className='discard-area';
-    const lastWin=game.winner===p && game.lastDiscard;
-    game.discards[p].forEach(t=>{
-      da.appendChild(tileEl(t,{mini:true, winTile:!!(lastWin&&t===game.lastDiscard)}));
+
+  /* ---------- 长按手牌 → 弹出放大条 ----------
+     竖屏一行要塞 14 张，单张只分得到 ~24px，这是屏幕物理上限而不是实现问题。
+     长按弹出放大版（42px/张），松手即收；按住时左右滑动可以顺着读。
+     ⚠ 单击手牌就是出牌，所以长按触发后必须在「捕获阶段」吞掉紧随其后的 click，
+       否则松手会顺手把牌打出去。 */
+  let zoomBound=false;
+  const ZOOM={t:null,fired:false,x:0,y:0,box:null,strip:null,mark:-1};
+
+  function zoomStep(strip){
+    const c=strip.children;
+    if (!c || !c.length) return 1;
+    const d=(c.length>1 ? c[1].offsetLeft-c[0].offsetLeft : c[0].offsetWidth);
+    return (d>0 ? d : 1);
+  }
+  function zoomHighlight(clientX){
+    const strip=ZOOM.strip;
+    if (!strip || !strip.getBoundingClientRect) return;
+    const r=strip.getBoundingClientRect(), step=zoomStep(strip);
+    const idx=Math.max(0, Math.min(strip.children.length-1,
+      Math.floor((clientX-r.left+(strip.scrollLeft||0))/step)));
+    if (idx===ZOOM.mark) return;
+    ZOOM.mark=idx;
+    for (let i=0;i<strip.children.length;i++) strip.children[i].classList.toggle('hot', i===idx);
+  }
+  function zoomOpen(clientX){
+    const box=document.getElementById('hand-zoom');
+    if (!box || !lastGame) return;
+    box.innerHTML='';
+    const strip=document.createElement('div'); strip.className='zoom-strip';
+    lastGame.hands[0].forEach(t=>{
+      const cell=document.createElement('div'); cell.className='zoom-cell';
+      cell.appendChild(tileEl(t));
+      strip.appendChild(cell);
     });
-    return da;
+    box.appendChild(strip);
+    box.classList.add('show');
+    ZOOM.box=box; ZOOM.strip=strip; ZOOM.mark=-1;
+    if (strip.getBoundingClientRect && strip.children.length){
+      // 先把按住的那张滚到中间，再按手指位置高亮
+      const r=strip.getBoundingClientRect(), step=zoomStep(strip);
+      const idx=Math.max(0, Math.min(strip.children.length-1, Math.floor((clientX-r.left)/step)));
+      strip.scrollLeft=Math.max(0, idx*step - strip.clientWidth/2 + step/2);
+      ZOOM.mark=idx;
+      for (let i=0;i<strip.children.length;i++) strip.children[i].classList.toggle('hot', i===idx);
+    }
+  }
+  function zoomClose(){
+    if (!ZOOM.box) return;
+    ZOOM.box.classList.remove('show');
+    ZOOM.box.innerHTML='';
+    ZOOM.box=null; ZOOM.strip=null; ZOOM.mark=-1;
+  }
+  function bindHandZoom(){
+    if (zoomBound || !document.getElementById) return;
+    const hand=document.getElementById('hand-area');
+    if (!hand || !hand.addEventListener) return;
+    zoomBound=true;
+    hand.addEventListener('pointerdown', e=>{
+      if (e.pointerType==='mouse') return;        // 桌面用 hover 就够，不抢鼠标
+      ZOOM.x=e.clientX; ZOOM.y=e.clientY; ZOOM.fired=false;
+      clearTimeout(ZOOM.t);
+      ZOOM.t=setTimeout(()=>{ ZOOM.fired=true; zoomOpen(ZOOM.x); },260);
+    },{passive:true});
+    hand.addEventListener('pointermove', e=>{
+      if (ZOOM.fired){
+        const dx=e.clientX-ZOOM.x; ZOOM.x=e.clientX;
+        if (ZOOM.strip) ZOOM.strip.scrollLeft-=dx;   // 手指拖动 → 放大条跟着平移
+        zoomHighlight(e.clientX);
+        return;
+      }
+      // 还没到长按时长就滑走了，说明不是长按，取消
+      if (Math.abs(e.clientX-ZOOM.x)>8 || Math.abs(e.clientY-ZOOM.y)>8) clearTimeout(ZOOM.t);
+    },{passive:true});
+    const end=()=>{ clearTimeout(ZOOM.t); zoomClose(); };
+    hand.addEventListener('pointerup', end);
+    hand.addEventListener('pointercancel', end);
+    hand.addEventListener('pointerleave', end);
+    hand.addEventListener('click', e=>{
+      if (ZOOM.fired){ e.stopPropagation(); e.preventDefault(); ZOOM.fired=false; }
+    }, true);
   }
   function renderActions(game, ui, pending){
     const bar=document.getElementById('action-bar');
@@ -1230,24 +1788,42 @@ const Controller = (function(){
 
   /* ---- AI 节奏控制 ----
      所有 AI 的暂缓都走这里，改一处即可全局调节。
-     用随机抖动而非固定值：固定毫秒会让三家 AI 像同一个节拍器，
-     抖动之后「摸→想→打」才像在思考。
+
+     为什么定这个量级（2026-09 调研其他麻将 AI 的出牌时长）：
+       · AI 的决策本身只要 10~300ms，**玩家感知到的完全是「停顿」**，
+         所以这里调的不是算力而是演出；
+       · 雀魂：每次出牌/立直的动画 + 角色 cut-in，让玩家感知每次动作多花 1~2 秒；
+       · 天凤：每巡限时 5 秒；世嘉网络麻将高段 1.6 秒/巡（已属偏快一档）；
+       · 皇家学会 AI 对手实验：AI 实际耗时 2.5 秒、扣掉 1~2 秒动画后，
+         **玩家感知等待仍要落在 1 秒左右**才算舒适；
+       · 拟人化打牌工具（MahjongCopilot 等）：明确要「基础延迟随机 +
+         关键巡额外加时」，纯固定毫秒会让三家 AI 像同一个节拍器。
+     取值：AI「摸→打」的总停顿落在 1.2~1.6 秒（含 scheduleLoop 的 320ms），
+     并有约 15% 概率长考——正是真人最容易犹豫的那一步。
+     （旧值 420~720ms 被玩家反馈「出牌太快」，两档相差约 2 倍。）
+
      玩家自己的动作（出牌/碰杠/结算）不受影响，不会拖慢手感。 */
   const AI_PACE=(function(){
     const P={
-      drawToThink: [420,720],  // 摸进一张后，愣一下再决定打哪张
-      thinkToMove: [260,460],  // 决定动作后到真正落子/推牌
-      claim:       [430,750],  // 被打了牌后，反应碰/杠/吃（比出牌略长，像在权衡）
-      settle:      [700,1000]  // 和牌/抢杠后停一拍再弹结算，别太突兀
+      drawToThink: [850,1400],  // 摸进一张后，看清牌再决定打哪张
+      thinkToMove: [500,850],   // 决定动作后到真正落子/推牌
+      claim:       [650,1100],  // 被打了牌后，反应碰/杠/吃（比出牌略长，像在权衡）
+      settle:      [800,1150]   // 和牌/抢杠后停一拍再弹结算，别太突兀
     };
+    // 偶尔长考：只加在「摸牌后出哪张」上。短路写法保证其它 key 不消耗随机数
+    const LONG={ p:0.15, r:[1500,2400] };
     const jitter=function(r){ return Math.round(r[0]+Math.random()*(r[1]-r[0])); };
-    /* 难度可影响节奏：简单档更快、困难档更慢（显得在深算）。
-       目前三档一致，需要时改 speed 即可。 */
-    const speed=function(){ return 1; };
+    /* 难度影响节奏：简单档出牌干脆、困难档像在深算（显得在算牌）。
+       基准值即「普通」，所以三档都比旧版明显慢。 */
+    const SPEED={ easy:0.9, normal:1, hard:1.15 };
+    let level='normal';
     return {
-      for: function(key,level){
-        const r=P[key]||P.thinkToMove;
-        return Math.round(jitter(r)*speed(level));
+      // 非法档位直接忽略，不要静默改成 NaN（NaN 会让 setTimeout 变成 0＝瞬发）
+      setLevel: function(lv){ if (SPEED[lv]) level=lv; },
+      for: function(key,lv){
+        const ms=(key==='drawToThink' && Math.random()<LONG.p)
+          ? jitter(LONG.r) : jitter(P[key]||P.thinkToMove);
+        return Math.round(ms*(SPEED[lv||level]||1));
       }
     };
   })();
@@ -1543,10 +2119,12 @@ const Controller = (function(){
   }
 
   return {
-    init(opts){ game=new Game(opts); AI.setLevel(opts.difficulty||'normal'); AI.assignPersonas(opts.persona||'random'); onTileClick=null; onPlayerAction=null; },
+    init(opts){ game=new Game(opts); AI.setLevel(opts.difficulty||'normal'); AI_PACE.setLevel(opts.difficulty||'normal'); AI.assignPersonas(opts.persona||'random'); onTileClick=null; onPlayerAction=null; },
     startNewRound,
     get game(){ return game; },
     get ui(){ return ui; },
+    // 出牌快慢直接决定手感，暴露给自测做区间断言（见 test/selftest.js「AI 节奏」段）
+    get pace(){ return AI_PACE; },
   };
 })();
 
@@ -1584,6 +2162,31 @@ const Controller = (function(){
     Renderer.hideResult();
     Controller.startNewRound();
   });
+
+  /* 排版自测开关（只在 URL 带 hash 时触发，正式访问完全走不到这里）：
+     index.html#auto        直接开局
+     index.html#auto&fill=20 开局后给四家各灌 20 张弃牌，看后期最挤的样子 */
+  // typeof 守卫：test/selftest.js 用 new Function 跑这段代码，Node 里没有 location
+  const dbg=((typeof location!=='undefined' && location.hash)||'').replace(/^#/,'');
+  if (/(^|&)auto(&|$)/.test(dbg)){
+    document.getElementById('start-btn').click();
+    const m=/fill=(\d+)/.exec(dbg);
+    if (m) setTimeout(()=>{
+      const g=Controller.game; if(!g) return;
+      const pool=TileUtils.fullTileSet().filter(t=>!TileUtils.isFlower(t));
+      const n=Math.min(+m[1], 34);
+      for (let p=0;p<4;p++) for (let i=0;i<n;i++) g.discards[p].push(pool[(p*31+i*7)%pool.length]);
+      // 也要把 lastDiscard 摆上，否则中央那块是空的、预览失真
+      g.lastDiscard=g.discards[2][n-1]; g.lastDiscardBy=2; g.totalDiscards=4*n;
+      Renderer.renderAll(g, Controller.ui);
+      // fill 之后再开浮层，否则里面没牌可看
+      const pm=/peek=(\d)/.exec(dbg);
+      if (pm) setTimeout(()=>{
+        const seat=document.getElementById(+pm[1]===3?'seat-west':'seat-east');
+        if (seat && seat.click) seat.click();
+      }, 60);
+    }, 80);
+  }
 })();
 </script>
 </body>

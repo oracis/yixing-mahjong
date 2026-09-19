@@ -9,12 +9,31 @@
     --tile:#faf6ea; --tile-edge:#d8cfb8; --tile-text:#3a3226;
     --accent:#e8c15a; --red:#c0392b; --gold:#f0c96a;
     --panel:rgba(0,0,0,.28);
-    /* 牌尺寸集中在这里，断点内只改这几个变量。
-       弃牌区（.discard-area .tile.mini）在此基础上升一号，见下方「弃牌区」注释。
+    /* 牌尺寸集中在这里，断点内只改「宽度」基准值。
+       所有高度都用 --tile-ar 从宽度算出来，这样无论屏幕多窄，牌面比例都不会变形
+       （旧版把宽高分别写死，窄屏被 flex 挤压后宽高比从 0.71 掉到 0.52，牌面糊成一团）。
        注意：这些变量必须留在本块内——scripts/gen_tiles_preview.py 只读取第一个 :root。 */
-    --tile-w:42px;  --tile-h:58px;
-    --small-w:30px; --small-h:42px;
-    --mini-w:22px;  --mini-h:30px;
+    --tile-ar:1.381;                                              /* 58 / 42，牌面宽高比 */
+    --tile-w:42px;  --tile-h:calc(var(--tile-w) * var(--tile-ar));
+    --small-w:30px; --small-h:calc(var(--small-w) * var(--tile-ar));
+    --mini-w:30px;  --mini-h:calc(var(--mini-w) * var(--tile-ar));
+    /* 上下家那一列只放「信息条+牌背+弃牌」，给死宽度；
+       剩下的全部给中间那条 —— 对家/自己的弃牌带就在中间，
+       越宽就越少折行，也就越不吃高度（横屏最缺的正是高度）。 */
+    --side-w:104px;
+    /* 对手牌背。对家横排，你看得到牌背的宽面，所以按牌的比例叠；
+       上下家竖排，你看到的是牌的侧棱，所以画成一叠薄片——更接近真麻将的观感。
+       ⚠ 这两样都不能占独立列：竖屏宽度是手牌唯一的敌人（见 --hand-w）。 */
+    --back-w:30px;  --back-h:calc(var(--back-w) * var(--tile-ar)); --back-step:19px;
+    --sback-w:24px; --sback-h:9px;
+    --hand-gap:3px;
+    /* 手牌一行必须塞下 14 张：左右各 6px 内边距 + 13 个间隙 = 51px。
+       用 min() 保证既不超过基准档，也永不溢出、永不被压扁。 */
+    --hand-w:min(var(--tile-w), calc((100vw - 51px) / 14));
+    --hand-h:calc(var(--hand-w) * var(--tile-ar));
+    --zoom-w:42px;  --zoom-h:calc(var(--zoom-w) * var(--tile-ar));
+    /* 中央放大的「最后一张弃牌」。竖屏弃牌只有 26px 宽，靠牌河看不清这张 */
+    --ld-w:min(64px, 18vw);
   }
   *{margin:0;padding:0;box-sizing:border-box;}
   html,body{height:100%;}
@@ -119,54 +138,93 @@ const TileArt = (function(){
   const SERIF = "'Songti SC','SimSun','STSong','Noto Serif CJK SC','Source Han Serif SC',serif";
   const F = 'font-family="' + SERIF + '"';
 
+  /* 三色取自参考图逐像素采样（最饱和 5% 像素的中位色）：
+     藏蓝 #2d3d67 · 深红 #af2b36 · 竹绿 #16663a
+     绿色比参考图的 #2b7c46 略深：条子的描边只有 ~1px，太亮的绿在 42px 牌面上
+     会被抗锯齿糊成浅灰（这正是之前「条子对比不明显」的根因），降明度保可读性。 */
   const COLOR = {
-    dotRing:'#2759a8', dotCore:'#c0392b',
-    bamboo:'#1f7a45', bambooNode:'#c0392b', birdBrown:'#b5651d',
-    manNum:'#1b3b6f', manWan:'#c0392b',
-    wind:'#1b3b6f', red:'#c0392b', green:'#1e7d44', whiteFrame:'#2759a8',
-    flower:'#c2185b'
+    navy:'#2d3d67', red:'#af2b36', green:'#16663a',
+    greenPale:'#e8f2e8',
+    manNum:'#2d3d67', manWan:'#af2b36',
+    wind:'#2d3d67', whiteFrame:'#2d3d67', flower:'#c2185b'
   };
 
-  /* ---------- 饼（筒）：同心圆点阵 ---------- */
+  /* ---------- 饼（筒）：三色同心圆靶心 ----------
+     圆点不是「空心环 + 实心芯」，而是**实心圆挖两道白环**：
+       实心圆 R → 白环 0.63R → 彩环 0.50R → 白环 0.24R → 彩芯 0.13R
+     五个半径比例来自对参考图做「按半径统计彩色像素占比」的剖面测量，
+     比目测copy可靠。位置/半径同样按参考图逐张连通域测量得出。 */
+  const PIN = { B:COLOR.navy, G:COLOR.green, R:COLOR.red };
+  function pinDot(cx,cy,R,key){
+    const c=PIN[key], f=function(k){ return (R*k).toFixed(2); };
+    return `<circle cx="${cx}" cy="${cy}" r="${f(1)}" fill="${c}"/>`+
+           `<circle cx="${cx}" cy="${cy}" r="${f(0.63)}" fill="#fff"/>`+
+           `<circle cx="${cx}" cy="${cy}" r="${f(0.50)}" fill="${c}"/>`+
+           `<circle cx="${cx}" cy="${cy}" r="${f(0.24)}" fill="#fff"/>`+
+           `<circle cx="${cx}" cy="${cy}" r="${f(0.13)}" fill="${c}"/>`;
+  }
+  // 每点 = [x, y, 色, 半径?]；不给半径就用该牌的默认 R
   const DOT_LAYOUT = {
-    1:{r:21, pts:[[50,69]]},
-    2:{r:16.5,pts:[[50,40],[50,98]]},
-    3:{r:14.5,pts:[[24,101],[50,69],[76,37]]},
-    4:{r:14.5,pts:[[31,41],[69,41],[31,97],[69,97]]},
-    5:{r:13.5,pts:[[31,40],[69,40],[50,69],[31,98],[69,98]]},
-    6:{r:13,  pts:[[31,33],[69,33],[31,69],[69,69],[31,105],[69,105]]},
-    7:{r:12,  pts:[[26,30],[50,30],[74,30],[31,73],[69,73],[31,113],[69,113]]},
-    8:{r:11.5,pts:[[31,29],[69,29],[31,57],[69,57],[31,86],[69,86],[31,114],[69,114]]},
-    9:{r:11.5,pts:[[25,32],[50,32],[75,32],[25,69],[50,69],[75,69],[25,106],[50,106],[75,106]]}
+    2:{R:17.2,pts:[[50,47,'B'],[50,97,'G']]},
+    3:{R:12.0,pts:[[35,38,'B'],[50,68,'R'],[65,101,'G']]},
+    4:{R:12.3,pts:[[34,36,'G'],[66,36,'B'],[34,102,'B'],[66,102,'G']]},
+    5:{R:12.6,pts:[[36,36,'G'],[64,36,'B'],[50,70,'R'],[36,103,'B'],[64,103,'G']]},
+    6:{R:10.6,pts:[[39,29,'G'],[61,29,'G'],[39,79,'R'],[61,79,'R'],[39,105,'R'],[61,105,'R']]},
+    7:{R:10.9,pts:[[28,26,'G'],[50,36,'G'],[72,46,'G'],
+                   [38,80,'R',12.1],[62,80,'R',12.1],[38,106,'R',12.1],[62,106,'R',12.1]]},
+    8:{R:11.0,pts:[[37,28,'B'],[63,28,'B'],[37,54,'B'],[63,54,'B'],
+                   [37,81,'B'],[63,81,'B'],[37,107,'B'],[63,107,'B']]},
+    9:{R:10.0,pts:[[30,28,'B'],[50,28,'B'],[70,28,'B'],
+                   [30,66,'R'],[50,66,'R'],[70,66,'R'],
+                   [30,104,'G'],[50,104,'G'],[70,104,'G']]}
   };
+  /* 一筒：团花。外藏蓝圈 + 12 瓣浅绿花环 + 中心红盘压白十字 */
+  function pin1(){
+    const cx=50, cy=70, R=34.5;
+    let petals='';
+    for (let i=0;i<12;i++){
+      petals+=`<ellipse cx="${cx}" cy="${(cy-R*0.575).toFixed(1)}" rx="${(R*0.135).toFixed(1)}"`+
+              ` ry="${(R*0.185).toFixed(1)}" fill="${COLOR.greenPale}" stroke="${COLOR.green}"`+
+              ` stroke-width="1.5" transform="rotate(${i*30} ${cx} ${cy})"/>`;
+    }
+    const rr=R*0.40, bar=R*0.075;
+    // 顺序：外圈 → 花瓣 → 白盘 → 红盘 → 白十字（白盘压住花瓣内端，和参考图一致）
+    return `<circle cx="${cx}" cy="${cy}" r="${(R*0.935).toFixed(1)}" fill="none"`+
+             ` stroke="${COLOR.navy}" stroke-width="${(R*0.13).toFixed(1)}"/>`+
+           petals+
+           `<circle cx="${cx}" cy="${cy}" r="${(R*0.47).toFixed(1)}" fill="#fff"/>`+
+           `<circle cx="${cx}" cy="${cy}" r="${rr.toFixed(1)}" fill="${COLOR.red}"/>`+
+           `<rect x="${(cx-bar/2).toFixed(1)}" y="${(cy-rr).toFixed(1)}" width="${bar.toFixed(1)}" height="${(rr*2).toFixed(1)}" fill="#fff"/>`+
+           `<rect x="${(cx-rr).toFixed(1)}" y="${(cy-bar/2).toFixed(1)}" width="${(rr*2).toFixed(1)}" height="${bar.toFixed(1)}" fill="#fff"/>`;
+  }
   function dotsSvg(n){
+    if (n===1) return pin1();
     const L=DOT_LAYOUT[n]; if(!L) return '';
-    return L.pts.map(function(p){
-      const r=L.r;
-      return `<circle cx="${p[0]}" cy="${p[1]}" r="${r}" fill="#fff" stroke="${COLOR.dotRing}" stroke-width="3"/>`+
-             `<circle cx="${p[0]}" cy="${p[1]}" r="${(r*0.44).toFixed(1)}" fill="${COLOR.dotCore}"/>`;
-    }).join('');
+    return L.pts.map(function(p){ return pinDot(p[0],p[1],p[3]||L.R,p[2]); }).join('');
   }
 
   /* ---------- 条（索）：竹节 / 1 条为雀鸟 ----------
-     传统排布：7 条 = 顶行 1 条竖 + 中间 3 条斜 + 底行 3 条竖；
-               8 条 = 第一行 4 条竖 + 第二行 4 条斜（八根一眼可数，不会像 4×2 那样错看成两个大块） */
-  const A = 26;                       // 斜置角度
+     排布全部按参考图连通域实测定值：
+       6 条是 3 列 × 2 行（不是 2 列 × 3 行）；7 条顶部 1 根红竹 + 下方 3×2，
+       中间那列是藏蓝；9 条是 3×3 且**中间一列**为红（筒子九是中间一行为红，两者不同）。*/
   const BAMBOO_LAYOUT = {
-    2:{w:16,h:56, pts:[[36,69,0],[64,69,0]]},
-    3:{w:15,h:40, pts:[[50,36,0],[32,94,0],[68,94,0]]},
-    4:{w:15,h:40, pts:[[31,41,0],[69,41,0],[31,97,0],[69,97,0]]},
-    5:{w:13,h:36, pts:[[29,38,0],[71,38,0],[50,69,0],[29,100,0],[71,100,0]]},
-    6:{w:13,h:30, pts:[[31,32,0],[69,32,0],[31,69,0],[69,69,0],[31,106,0],[69,106,0]]},
-    7:{w:11,h:26, pts:[[50,28,0],[25,62,A],[50,62,A],[75,62,A],[25,110,0],[50,110,0],[75,110,0]]},
-    8:{w:11,h:26, pts:[[25,34,0],[42,34,0],[59,34,0],[76,34,0],
-                       [22,104,A],[39,104,A],[56,104,A],[73,104,A]]},
-    9:{w:11,h:26, pts:[[25,32,0],[50,32,0],[75,32,0],[25,69,0],[50,69,0],[75,69,0],[25,106,0],[50,106,0],[75,106,0]]}
+    2:{w:13.5,h:42, pts:[[50,46,0,'G'],[50,93,0,'G']]},
+    3:{w:11,  h:46, pts:[[50,41,0,'G'],[30,94,0,'G'],[70,94,0,'G']]},
+    4:{w:9.5, h:44, pts:[[35,41,0,'G'],[65,41,0,'G'],[35,100,0,'G'],[65,100,0,'G']]},
+    5:{w:10,  h:45, pts:[[30,37,0,'G'],[70,37,0,'G'],[50,70,0,'R'],[30,103,0,'G'],[70,103,0,'G']]},
+    6:{w:10.5,h:47, pts:[[30,44,0,'G'],[50,44,0,'G'],[70,44,0,'G'],[30,96,0,'G'],[50,96,0,'G'],[70,96,0,'G']]},
+    7:{w:9,   h:32, pts:[[50,25,0,'R'],[30,64,0,'G'],[50,64,0,'B'],[70,64,0,'G'],
+                         [30,102,0,'G'],[50,102,0,'B'],[70,102,0,'G']]},
+    9:{w:10.5,h:34, pts:[[30,28,0,'G'],[50,28,0,'R'],[70,28,0,'G'],
+                         [30,66,0,'G'],[50,66,0,'R'],[70,66,0,'G'],
+                         [30,104,0,'G'],[50,104,0,'R'],[70,104,0,'G']]}
   };
-  function bambooUnit(cx,cy,w,h,deg){
+  function bambooUnit(cx,cy,w,h,deg,key){
     const x=(cx-w/2).toFixed(1), y=(cy-h/2).toFixed(1), x2=(cx+w/2).toFixed(1);
-    const y1=(cy-h*0.20).toFixed(1), y2=(cy+h*0.20).toFixed(1);
-    const M=COLOR.bamboo, sw=Math.max(2, Math.min(w,h)*0.16).toFixed(2);
+    const y1=(cy-h*0.26).toFixed(1), y2=(cy+h*0.26).toFixed(1);
+    // 描边不能太细：牌面 42px 时 SVG 缩放比仅约 0.42，
+    // 低于 3 个 viewBox 单位就会被抗锯齿糊成浅色，凑近看才分辨得出竹节
+    const M=PIN[key]||COLOR.green, sw=Math.max(3, Math.min(w,h)*0.24).toFixed(2);
     const inner=`<g>`+
       `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${(w/2).toFixed(1)}" fill="#fff" stroke="${M}" stroke-width="${sw}"/>`+
       `<line x1="${x}" y1="${y1}" x2="${x2}" y2="${y1}" stroke="${M}" stroke-width="${(sw*0.8).toFixed(2)}"/>`+
@@ -176,29 +234,58 @@ const TileArt = (function(){
     // 斜置：绕自身中心旋转
     return `<g transform="rotate(${deg} ${cx} ${cy})">${inner}</g>`;
   }
+  /* 已知两端点画一根竹：竹节单元是竖直的，绕中心转到目标方向。
+     旋转角推导：SVG 里 (0,1)[向下] 旋转 θ 后为 (-sinθ, cosθ)，
+     要让它对齐 (dx,dy) ⇒ θ = atan2(-dx, dy)。 */
+  function bambooSeg(x1,y1,x2,y2,w,key){
+    const cx=(x1+x2)/2, cy=(y1+y2)/2;
+    const len=Math.sqrt((x2-x1)*(x2-x1)+(y2-y1)*(y2-y1));
+    const deg=Math.atan2(-(x2-x1), (y2-y1))*180/Math.PI;
+    return bambooUnit(cx,cy,w,len,deg,key);
+  }
+  /* 八条：上「W」下「M」，两半各 = 2 根竖竹 + 2 根斜竹，合计正好 8 根可数 */
+  function bamboo8(){
+    const w=10, vh=48, G='G';
+    return [
+      bambooUnit(25,42,w,vh,0,G), bambooUnit(75,42,w,vh,0,G),
+      bambooSeg(25,66,50,20,9,G), bambooSeg(50,20,75,66,9,G),
+      bambooUnit(25,98,w,vh,0,G), bambooUnit(75,98,w,vh,0,G),
+      bambooSeg(25,74,50,120,9,G), bambooSeg(50,120,75,74,9,G)
+    ].join('');
+  }
+  /* 一条：燕子。红冠红喙、白身藏蓝描边+羽纹、右侧翅、红长尾，绿枝叶衬底 */
   function birdSvg(){
-    const g=COLOR.bamboo, r=COLOR.bambooNode, b=COLOR.birdBrown;
+    const G=COLOR.green, B=COLOR.navy, R=COLOR.red, W='#fff';
     return `<g>`+
-      // 身体
-      `<path d="M38 44 C46 34 57 36 60 48 C64 62 57 80 47 84 C37 87 30 81 30 70 C30 60 32 51 38 44 Z" fill="${g}"/>`+
-      // 头 + 眼 + 喙
-      `<circle cx="35" cy="41" r="8.5" fill="${g}"/>`+
-      `<circle cx="32.5" cy="39" r="1.9" fill="#fff"/>`+
-      `<path d="M26.5 41 L17 44.5 L26.5 48 Z" fill="${r}"/>`+
-      // 翅
-      `<path d="M45 57 C55 53 63 57 67 64" stroke="#fff" stroke-width="3.2" fill="none" stroke-linecap="round" opacity=".9"/>`+
-      // 尾羽
-      `<path d="M52 80 C60 85 66 92 68 101" stroke="${g}" stroke-width="3.6" fill="none" stroke-linecap="round"/>`+
-      `<path d="M55 85 C65 89 71 96 73 105" stroke="${g}" stroke-width="2.6" fill="none" stroke-linecap="round" opacity=".65"/>`+
-      // 腿 + 枝
-      `<path d="M42 83 L40 98 M50 83 L53 98" stroke="${b}" stroke-width="2.4" stroke-linecap="round"/>`+
-      `<path d="M35 98 L57 98" stroke="${b}" stroke-width="2.2" stroke-linecap="round"/>`+
+      // 绿枝（衬在鸟后）
+      `<path d="M74 20 C64 36 54 50 40 60 C26 70 17 88 21 110" fill="none" stroke="${G}" stroke-width="3.2" stroke-linecap="round"/>`+
+      `<path d="M21 110 C26 98 36 92 48 92" fill="none" stroke="${G}" stroke-width="3" stroke-linecap="round"/>`+
+      `<path d="M62 38 C72 30 84 33 90 43 C79 47 68 45 62 41 Z" fill="${G}"/>`+
+      // 红色长尾
+      `<path d="M60 68 C70 80 77 95 80 114" fill="none" stroke="${R}" stroke-width="5.5" stroke-linecap="round"/>`+
+      // 身体（白底藏蓝描边）
+      `<path d="M32 44 C42 33 56 36 60 50 C64 65 57 81 45 85 C33 89 25 78 25 64 C25 55 28 49 32 44 Z" fill="${W}" stroke="${B}" stroke-width="3"/>`+
+      // 胸前羽纹
+      `<path d="M36 53 L36 78 M42 51 L42 82 M48 53 L48 79 M54 57 L54 75" stroke="${B}" stroke-width="1.5" opacity=".6"/>`+
+      // 翅（右侧，带格纹）
+      `<path d="M46 47 C60 42 76 46 86 57 C75 62 62 62 50 59 Z" fill="${W}" stroke="${B}" stroke-width="2.6"/>`+
+      `<path d="M52 51 L62 48 M55 57 L68 57 M63 51 L74 53" stroke="${B}" stroke-width="1.3" opacity=".6"/>`+
+      // 头
+      `<circle cx="38" cy="33" r="12" fill="${W}" stroke="${B}" stroke-width="3"/>`+
+      // 冠羽（红）
+      `<path d="M41 23 C45 13 57 8 69 12 C59 19 53 26 51 33 C47 26 44 23 41 23 Z" fill="${R}"/>`+
+      // 喙（红，朝左）
+      `<path d="M27 29 L10 36 L27 43 Z" fill="${R}"/>`+
+      // 眼
+      `<circle cx="35" cy="31" r="3.6" fill="none" stroke="${B}" stroke-width="1.8"/>`+
+      `<circle cx="35" cy="31" r="1.2" fill="${B}"/>`+
       `</g>`;
   }
   function bambooSvg(n){
     if (n===1) return birdSvg();
+    if (n===8) return bamboo8();
     const L=BAMBOO_LAYOUT[n]; if(!L) return '';
-    return L.pts.map(function(p){ return bambooUnit(p[0],p[1],L.w,L.h,p[2]); }).join('');
+    return L.pts.map(function(p){ return bambooUnit(p[0],p[1],L.w,L.h,p[2],p[3]); }).join('');
   }
 
   /* ---------- 万：汉数字 + 萬 ---------- */

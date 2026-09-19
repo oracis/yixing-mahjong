@@ -17,3 +17,12 @@ _t2.js
 _t3.js
 _dbg.js
 _out.txt
+
+# scripts/_extract_mod.js 从 index.html 抽出的中间产物
+scripts/_mods.js
+
+# scripts/shoot.sh 的截图输出（工装产物，不入库）
+.shots/
+
+# playwright-cli 的会话快照与控制台日志（临时工装）
+.playwright-cli/
