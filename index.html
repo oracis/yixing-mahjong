@@ -10,6 +10,12 @@
     --tile:#faf6ea; --tile-edge:#d8cfb8; --tile-text:#3a3226;
     --accent:#e8c15a; --red:#c0392b; --gold:#f0c96a;
     --panel:rgba(0,0,0,.28);
+    /* 牌尺寸集中在这里，断点内只改这几个变量。
+       弃牌区（.discard-area .tile.mini）在此基础上升一号，见下方「弃牌区」注释。
+       注意：这些变量必须留在本块内——scripts/gen_tiles_preview.py 只读取第一个 :root。 */
+    --tile-w:42px;  --tile-h:58px;
+    --small-w:30px; --small-h:42px;
+    --mini-w:22px;  --mini-h:30px;
   }
   *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
   html,body{height:100%;}
@@ -89,27 +95,41 @@
     box-shadow:0 1px 2px rgba(0,0,0,.4);
   }
 
-  /* ---------- 牌 ---------- */
+  /* ---------- 牌 ----------
+     尺寸变量定义在上方第一个 :root 里（预览脚本依赖该位置）。 */
   .tile{
-    width:42px; height:58px; border-radius:6px; position:relative; cursor:default;
+    width:var(--tile-w); height:var(--tile-h); border-radius:6px; position:relative; cursor:default;
     background:linear-gradient(160deg,#fffdf5,var(--tile) 55%,#e9e2cd);
     box-shadow:0 2px 0 var(--tile-edge), 0 3px 5px rgba(0,0,0,.45);
     border:1px solid #cfc6ad;
   }
-  .tile .face{ position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; line-height:1;}
-  .tile .num{ font-size:22px; font-weight:800; color:var(--tile-text); }
-  .tile .suit{ font-size:11px; margin-top:2px; color:#77705f; }
-  .tile.m .num{ color:#2456a8;} .tile.m .suit{color:#2456a8;}
-  .tile.p .num{ color:#b03434;} .tile.p .suit{color:#b03434;}
-  .tile.s .num{ color:#2e7d46;} .tile.s .suit{color:#2e7d46;}
-  .tile.z .num{ color:#3a3226;}
+  .tile .face{
+    position:absolute; inset:0; padding:2px 1px; box-sizing:border-box;
+    display:flex; align-items:center; justify-content:center; line-height:1;
+  }
+  .tile .face svg{ width:100%; height:100%; display:block; overflow:visible; }
   .tile.f{ background:linear-gradient(160deg,#ffeef5,#f7dbe6 60%,#ecc9d6); border-color:#d8a8bb;}
-  .tile.f .num{ color:#b03a68; font-size:18px;}
-  .tile .corner{ position:absolute; font-size:8px; color:#a99; }
-  .tile .corner.tl{ top:2px; left:4px;} .tile .corner.br{ bottom:2px; right:4px; transform:rotate(180deg);}
-  .tile.small{ width:30px;height:42px;} .tile.small .num{font-size:16px;} .tile.small .suit{display:none;}
-  .tile.mini{ width:22px;height:30px; border-radius:4px; box-shadow:0 1px 0 var(--tile-edge),0 1px 2px rgba(0,0,0,.4);}
-  .tile.mini .num{font-size:12px;} .tile.mini .suit{display:none;} .tile.mini .corner{display:none;}
+  .tile.small{ width:var(--small-w);height:var(--small-h);}
+  .tile.mini{ width:var(--mini-w);height:var(--mini-h); border-radius:4px; box-shadow:0 1px 0 var(--tile-edge),0 1px 2px rgba(0,0,0,.4);}
+  .tile.mini .face{ padding:1px; }
+
+  /* 弃牌区：区域不变，只把牌面放大一号，读数优先。
+     gap 同步收紧，避免行数变多后弃牌墙堆太高。
+     注意：只在 ≥621px 生效。手机端弃牌区宽度只有 46vw，
+     牌一放大就会多折出一行（实测 4~5 行、188px 高），
+     直接把操作按钮压住，所以手机上维持原尺寸。 */
+  @media (min-width:621px){
+    .discard-area{ gap:2px; }
+    .discard-area .tile.mini{
+      width:calc(var(--mini-w) + 4px);
+      height:calc(var(--mini-h) + 6px);
+    }
+    #area-east .discard-area .tile.mini,
+    #area-west .discard-area .tile.mini{
+      width:calc(var(--mini-h) + 6px);   /* 东西两侧的弃牌是横放的，宽高互换 */
+      height:calc(var(--mini-w) + 4px);
+    }
+  }
   .tile-back{
     width:32px;height:44px;border-radius:5px;
     background:repeating-linear-gradient(45deg,#2f7a55 0 4px,#28694a 4px 8px);
@@ -196,16 +216,18 @@
 
   /* ---------- 响应式 ---------- */
   @media (max-width:620px){
-    .tile{ width:34px;height:48px;} .tile .num{font-size:18px;} .tile .suit{font-size:9px;}
+    :root{
+      --tile-w:34px;  --tile-h:48px;
+      --mini-w:24px;  --mini-h:33px;   /* 手机上弃牌比原来 16×22 大一圈 */
+    }
     .hand-area{min-height:52px; gap:3px;}
     .discard-area{ width:46vw; }
     #action-bar{ bottom:118px; }
-    .tile.mini{width:16px;height:22px;} .tile.mini .num{font-size:10px;}
     #area-east,#area-west{ display:none; }
     #area-east .discard-area,#area-west .discard-area{ width:30vw;}
   }
   @media (max-width:400px){
-    .tile{ width:30px;height:42px;} .tile .num{font-size:16px;}
+    :root{ --tile-w:30px; --tile-h:42px; --mini-w:22px; --mini-h:30px; }
     #action-bar{ bottom:104px; }
   }
 </style>
@@ -314,6 +336,143 @@ const TileUtils = (function(){
     return arr;
   }
   return { rank, suit, isHonor, isFlower, isWind, isDragon, name, sortKey, sortHand, fullTileSet };
+})();
+
+/* ============================ 模块2.5：TileArt（矢量牌面） ============================
+   用 SVG 画出真实麻将牌的刻纹：
+     · 饼(筒)：同心圆点阵，按传统布局排布（3 斜排 / 7 为 3+2+2 / 9 为九宫）
+     · 条(索)：竹节图形，1 条画雀鸟
+     · 万：上方汉数字 + 下方红色「萬」
+     · 字牌：東南西北中發白（白板为刻空方框）
+     · 花牌：春夏秋冬梅蘭竹菊
+   viewBox 统一 100×138，与牌面 42×58 同比例，任意尺寸缩放不失真。
+=================================================================================== */
+const TileArt = (function(){
+  const VB='0 0 100 138';
+  const T=TileUtils, CONF=CONFIG;
+  // 注意：字体名用单引号，因为要放进双引号包裹的 HTML 属性里；用 JSON.stringify 会转义成 \" 导致 CSS 失效
+  const SERIF = "'Songti SC','SimSun','STSong','Noto Serif CJK SC','Source Han Serif SC',serif";
+  const F = 'font-family="' + SERIF + '"';
+
+  const COLOR = {
+    dotRing:'#2759a8', dotCore:'#c0392b',
+    bamboo:'#1f7a45', bambooNode:'#c0392b', birdBrown:'#b5651d',
+    manNum:'#1b3b6f', manWan:'#c0392b',
+    wind:'#1b3b6f', red:'#c0392b', green:'#1e7d44', whiteFrame:'#2759a8',
+    flower:'#c2185b'
+  };
+
+  /* ---------- 饼（筒）：同心圆点阵 ---------- */
+  const DOT_LAYOUT = {
+    1:{r:21, pts:[[50,69]]},
+    2:{r:16.5,pts:[[50,40],[50,98]]},
+    3:{r:14.5,pts:[[24,101],[50,69],[76,37]]},
+    4:{r:14.5,pts:[[31,41],[69,41],[31,97],[69,97]]},
+    5:{r:13.5,pts:[[31,40],[69,40],[50,69],[31,98],[69,98]]},
+    6:{r:13,  pts:[[31,33],[69,33],[31,69],[69,69],[31,105],[69,105]]},
+    7:{r:12,  pts:[[26,30],[50,30],[74,30],[31,73],[69,73],[31,113],[69,113]]},
+    8:{r:11.5,pts:[[31,29],[69,29],[31,57],[69,57],[31,86],[69,86],[31,114],[69,114]]},
+    9:{r:11.5,pts:[[25,32],[50,32],[75,32],[25,69],[50,69],[75,69],[25,106],[50,106],[75,106]]}
+  };
+  function dotsSvg(n){
+    const L=DOT_LAYOUT[n]; if(!L) return '';
+    return L.pts.map(function(p){
+      const r=L.r;
+      return `<circle cx="${p[0]}" cy="${p[1]}" r="${r}" fill="#fff" stroke="${COLOR.dotRing}" stroke-width="3"/>`+
+             `<circle cx="${p[0]}" cy="${p[1]}" r="${(r*0.44).toFixed(1)}" fill="${COLOR.dotCore}"/>`;
+    }).join('');
+  }
+
+  /* ---------- 条（索）：竹节 / 1 条为雀鸟 ----------
+     传统排布：7 条 = 顶行 1 条竖 + 中间 3 条斜 + 底行 3 条竖；
+               8 条 = 第一行 4 条竖 + 第二行 4 条斜（八根一眼可数，不会像 4×2 那样错看成两个大块） */
+  const A = 26;                       // 斜置角度
+  const BAMBOO_LAYOUT = {
+    2:{w:16,h:56, pts:[[36,69,0],[64,69,0]]},
+    3:{w:15,h:40, pts:[[50,36,0],[32,94,0],[68,94,0]]},
+    4:{w:15,h:40, pts:[[31,41,0],[69,41,0],[31,97,0],[69,97,0]]},
+    5:{w:13,h:36, pts:[[29,38,0],[71,38,0],[50,69,0],[29,100,0],[71,100,0]]},
+    6:{w:13,h:30, pts:[[31,32,0],[69,32,0],[31,69,0],[69,69,0],[31,106,0],[69,106,0]]},
+    7:{w:11,h:26, pts:[[50,28,0],[25,62,A],[50,62,A],[75,62,A],[25,110,0],[50,110,0],[75,110,0]]},
+    8:{w:11,h:26, pts:[[25,34,0],[42,34,0],[59,34,0],[76,34,0],
+                       [22,104,A],[39,104,A],[56,104,A],[73,104,A]]},
+    9:{w:11,h:26, pts:[[25,32,0],[50,32,0],[75,32,0],[25,69,0],[50,69,0],[75,69,0],[25,106,0],[50,106,0],[75,106,0]]}
+  };
+  function bambooUnit(cx,cy,w,h,deg){
+    const x=(cx-w/2).toFixed(1), y=(cy-h/2).toFixed(1), x2=(cx+w/2).toFixed(1);
+    const y1=(cy-h*0.20).toFixed(1), y2=(cy+h*0.20).toFixed(1);
+    const M=COLOR.bamboo, sw=Math.max(2, Math.min(w,h)*0.16).toFixed(2);
+    const inner=`<g>`+
+      `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${(w/2).toFixed(1)}" fill="#fff" stroke="${M}" stroke-width="${sw}"/>`+
+      `<line x1="${x}" y1="${y1}" x2="${x2}" y2="${y1}" stroke="${M}" stroke-width="${(sw*0.8).toFixed(2)}"/>`+
+      `<line x1="${x}" y1="${y2}" x2="${x2}" y2="${y2}" stroke="${M}" stroke-width="${(sw*0.8).toFixed(2)}"/>`+
+      `</g>`;
+    if (!deg) return inner;
+    // 斜置：绕自身中心旋转
+    return `<g transform="rotate(${deg} ${cx} ${cy})">${inner}</g>`;
+  }
+  function birdSvg(){
+    const g=COLOR.bamboo, r=COLOR.bambooNode, b=COLOR.birdBrown;
+    return `<g>`+
+      // 身体
+      `<path d="M38 44 C46 34 57 36 60 48 C64 62 57 80 47 84 C37 87 30 81 30 70 C30 60 32 51 38 44 Z" fill="${g}"/>`+
+      // 头 + 眼 + 喙
+      `<circle cx="35" cy="41" r="8.5" fill="${g}"/>`+
+      `<circle cx="32.5" cy="39" r="1.9" fill="#fff"/>`+
+      `<path d="M26.5 41 L17 44.5 L26.5 48 Z" fill="${r}"/>`+
+      // 翅
+      `<path d="M45 57 C55 53 63 57 67 64" stroke="#fff" stroke-width="3.2" fill="none" stroke-linecap="round" opacity=".9"/>`+
+      // 尾羽
+      `<path d="M52 80 C60 85 66 92 68 101" stroke="${g}" stroke-width="3.6" fill="none" stroke-linecap="round"/>`+
+      `<path d="M55 85 C65 89 71 96 73 105" stroke="${g}" stroke-width="2.6" fill="none" stroke-linecap="round" opacity=".65"/>`+
+      // 腿 + 枝
+      `<path d="M42 83 L40 98 M50 83 L53 98" stroke="${b}" stroke-width="2.4" stroke-linecap="round"/>`+
+      `<path d="M35 98 L57 98" stroke="${b}" stroke-width="2.2" stroke-linecap="round"/>`+
+      `</g>`;
+  }
+  function bambooSvg(n){
+    if (n===1) return birdSvg();
+    const L=BAMBOO_LAYOUT[n]; if(!L) return '';
+    return L.pts.map(function(p){ return bambooUnit(p[0],p[1],L.w,L.h,p[2]); }).join('');
+  }
+
+  /* ---------- 万：汉数字 + 萬 ---------- */
+  const CN_NUM=['','一','二','三','四','五','六','七','八','九'];
+  function manSvg(n){
+    return `<text x="50" y="60" text-anchor="middle" ${F} font-size="38" font-weight="700" fill="${COLOR.manNum}">${CN_NUM[n]}</text>`+
+           `<text x="50" y="118" text-anchor="middle" ${F} font-size="38" font-weight="700" fill="${COLOR.manWan}">萬</text>`;
+  }
+
+  /* ---------- 字牌 ---------- */
+  const HONOR_FACE={ z1:['東',COLOR.wind], z2:['南',COLOR.wind], z3:['西',COLOR.wind], z4:['北',COLOR.wind],
+                     z5:['中',COLOR.red],  z6:['發',COLOR.green] };
+  function honorSvg(tile){
+    const f=HONOR_FACE[tile];
+    if (f) return `<text x="50" y="92" text-anchor="middle" ${F} font-size="56" font-weight="700" fill="${f[1]}">${f[0]}</text>`;
+    // 白板：刻空方框
+    return `<rect x="25" y="26" width="50" height="86" rx="5" fill="none" stroke="${COLOR.whiteFrame}" stroke-width="4"/>`+
+           `<rect x="31" y="32" width="38" height="74" rx="3" fill="none" stroke="${COLOR.whiteFrame}" stroke-width="1.4" opacity=".45"/>`;
+  }
+
+  /* ---------- 花牌 ---------- */
+  function flowerSvg(ch){
+    return `<rect x="16" y="18" width="68" height="102" rx="7" fill="none" stroke="${COLOR.flower}" stroke-width="2.2" opacity=".45"/>`+
+           `<text x="50" y="86" text-anchor="middle" ${F} font-size="44" font-weight="700" fill="${COLOR.flower}">${ch}</text>`;
+  }
+
+  /* ---------- 对外接口 ---------- */
+  function faceSVG(tile){
+    if (T.isFlower(tile)) return flowerSvg(CONF.FLOWER[tile]);
+    if (T.isHonor(tile))  return honorSvg(tile);
+    const r=T.rank(tile), s=tile[0];
+    if (s==='m') return manSvg(r);
+    if (s==='p') return dotsSvg(r);
+    return bambooSvg(r);
+  }
+  function faceHTML(tile){
+    return `<svg viewBox="${VB}" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">${faceSVG(tile)}</svg>`;
+  }
+  return { faceHTML };
 })();
 
 /* ============================ 模块3：AudioEngine（Web Audio 程序化音效） ============================ */
@@ -890,9 +1049,8 @@ const Renderer = (function(){
     const el=document.createElement('div');
     if (opts.back){ el.className='tile-back'; return el; }
     el.className='tile '+(T.isFlower(tile)?'f':T.isHonor(tile)?'z':tile[0]);
-    const label=T.isFlower(tile)?C.FLOWER[tile]:T.isHonor(tile)?C.HONOR[tile]:T.rank(tile);
-    const sub=T.isFlower(tile)?'花':T.isHonor(tile)?'':({m:'萬',p:'饼',s:'條'})[tile[0]];
-    el.innerHTML=`<div class="face"><span class="num">${label}</span>${sub?`<span class="suit">${sub}</span>`:''}</div>`;
+    el.innerHTML=`<div class="face">${TileArt.faceHTML(tile)}</div>`;
+    el.title=T.name(tile);   // 图案化之后悬停可看牌名，方便确认
     if (opts.small) el.classList.add('small');
     if (opts.mini) el.classList.add('mini');
     if (opts.cls) el.classList.add(opts.cls);
@@ -1070,6 +1228,30 @@ const Controller = (function(){
     else if (game.state===STATE.DISCARD) handleDiscard(cp);
   }
 
+  /* ---- AI 节奏控制 ----
+     所有 AI 的暂缓都走这里，改一处即可全局调节。
+     用随机抖动而非固定值：固定毫秒会让三家 AI 像同一个节拍器，
+     抖动之后「摸→想→打」才像在思考。
+     玩家自己的动作（出牌/碰杠/结算）不受影响，不会拖慢手感。 */
+  const AI_PACE=(function(){
+    const P={
+      drawToThink: [420,720],  // 摸进一张后，愣一下再决定打哪张
+      thinkToMove: [260,460],  // 决定动作后到真正落子/推牌
+      claim:       [430,750],  // 被打了牌后，反应碰/杠/吃（比出牌略长，像在权衡）
+      settle:      [700,1000]  // 和牌/抢杠后停一拍再弹结算，别太突兀
+    };
+    const jitter=function(r){ return Math.round(r[0]+Math.random()*(r[1]-r[0])); };
+    /* 难度可影响节奏：简单档更快、困难档更慢（显得在深算）。
+       目前三档一致，需要时改 speed 即可。 */
+    const speed=function(){ return 1; };
+    return {
+      for: function(key,level){
+        const r=P[key]||P.thinkToMove;
+        return Math.round(jitter(r)*speed(level));
+      }
+    };
+  })();
+
   /* ---- 摸牌阶段 ---- */
   function handleDraw(p){
     if (game.checkLiuju()){ endRound('流局'); return; }
@@ -1114,9 +1296,9 @@ const Controller = (function(){
     }
 
     // AI
-    if (z.ok){ setTimeout(()=>handleWin(p,'zimo'),500); return; }
+    if (z.ok){ setTimeout(()=>handleWin(p,'zimo'),AI_PACE.for('settle')); return; }
     if (buGangs.length && AI.decideBuGang(game,p,buGangs[0])){
-      setTimeout(()=>attemptBuGang(p,buGangs[0]),550); return;
+      setTimeout(()=>attemptBuGang(p,buGangs[0]),AI_PACE.for('thinkToMove')); return;
     }
     if (anGangs.length && AI.decideAnGang(game,p,anGangs[0])){
       setTimeout(()=>{
@@ -1124,7 +1306,7 @@ const Controller = (function(){
         R.showToast(WINDS[p]+'·AI 暗杠',800);
         game.afterGang=true; R.renderAll(game,ui);
         game.state=STATE.DRAW; scheduleLoop();
-      },600);
+      },AI_PACE.for('thinkToMove'));
       return;
     }
     game.state=STATE.DISCARD; scheduleLoop();
@@ -1142,7 +1324,7 @@ const Controller = (function(){
         R.renderAll(game,ui);
         checkOthers(p,t);
       }
-    },600);
+    },AI_PACE.for('drawToThink'));
   }
 
   function setupPlayerDiscard(){
@@ -1190,7 +1372,7 @@ const Controller = (function(){
         R.renderActions(game,ui,{hu:true});
         return;
       }
-      setTimeout(()=>handleWin(p,'rong',tile,from),500);
+      setTimeout(()=>handleWin(p,'rong',tile,from),AI_PACE.for('settle'));
       return;
     }
     // 玩家的杠/碰/吃
@@ -1225,7 +1407,7 @@ const Controller = (function(){
             R.showToast(WINDS[p]+'·AI 明杠 '+T.name(tile),800);
             game.afterGang=true; R.renderAll(game,ui);
             game.state=STATE.DRAW; scheduleLoop();
-          },600);
+          },AI_PACE.for('claim'));
           return;
         } else {
           game.declinedPon[p].add(tile);  // AI 放弃明杠 → 记一圈
@@ -1241,7 +1423,7 @@ const Controller = (function(){
             R.showToast(WINDS[p]+'·AI 碰！',800);
             R.renderAll(game,ui);
             game.state=STATE.DISCARD; scheduleLoop();
-          },600);
+          },AI_PACE.for('claim'));
           return;
         } else {
           game.declinedPon[p].add(tile);  // AI 放弃碰 → 记一圈
@@ -1259,7 +1441,7 @@ const Controller = (function(){
             R.showToast(WINDS[next]+'·AI 吃！',800);
             R.renderAll(game,ui);
             game.state=STATE.DISCARD; scheduleLoop();
-          },600);
+          },AI_PACE.for('claim'));
           return;
         }
       }
@@ -1294,7 +1476,7 @@ const Controller = (function(){
         return;
       }
       // AI 必抢（白送的和）
-      setTimeout(()=>handleWin(q,'qianggang',tile,p),500);
+      setTimeout(()=>handleWin(q,'qianggang',tile,p),AI_PACE.for('settle'));
       return;
     }
     finishBuGang(p,tile);

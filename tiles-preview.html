@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>牌面预览 · 宜兴麻将</title>
+<style>
+  :root{
+    --felt:#1d5c3f; --felt2:#12402c;
+    --tile:#faf6ea; --tile-edge:#d8cfb8; --tile-text:#3a3226;
+    --accent:#e8c15a; --red:#c0392b; --gold:#f0c96a;
+    --panel:rgba(0,0,0,.28);
+    /* 牌尺寸集中在这里，断点内只改这几个变量。
+       弃牌区（.discard-area .tile.mini）在此基础上升一号，见下方「弃牌区」注释。
+       注意：这些变量必须留在本块内——scripts/gen_tiles_preview.py 只读取第一个 :root。 */
+    --tile-w:42px;  --tile-h:58px;
+    --small-w:30px; --small-h:42px;
+    --mini-w:22px;  --mini-h:30px;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    background:radial-gradient(ellipse at 50% 30%, var(--felt) 0%, var(--felt2) 100%);
+    color:#eee; padding:24px;
+    font-family:-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+  }
+  h1{ font-size:20px; color:var(--gold); letter-spacing:2px; margin-bottom:4px; }
+  h2{ font-size:14px; color:#a8c3b5; font-weight:400; margin:22px 0 10px; }
+  .row{ display:flex; flex-wrap:wrap; gap:8px; }
+  .tile{
+    width:var(--tile-w); height:var(--tile-h); border-radius:6px; position:relative; cursor:default;
+    background:linear-gradient(160deg,#fffdf5,var(--tile) 55%,#e9e2cd);
+    box-shadow:0 2px 0 var(--tile-edge), 0 3px 5px rgba(0,0,0,.45);
+    border:1px solid #cfc6ad;
+  }
+  .tile .face{
+    position:absolute; inset:0; padding:2px 1px; box-sizing:border-box;
+    display:flex; align-items:center; justify-content:center; line-height:1;
+  }
+  .tile .face svg{ width:100%; height:100%; display:block; overflow:visible; }
+  .tile.f{ background:linear-gradient(160deg,#ffeef5,#f7dbe6 60%,#ecc9d6); border-color:#d8a8bb;}
+  .tile.small{ width:var(--small-w);height:var(--small-h);}
+  .tile.mini{ width:var(--mini-w);height:var(--mini-h); border-radius:4px; box-shadow:0 1px 0 var(--tile-edge),0 1px 2px rgba(0,0,0,.4);}
+  .tile.mini .face{ padding:1px; }
+  .mini-row{ gap:5px; align-items:flex-end; }
+</style>
+</head>
+<body>
+  <h1>牌面预览</h1>
+  <div style="font-size:12px;color:#9db8ab;margin-bottom:6px">共 42 种牌面，全部由 index.html 内的 TileArt 模块实时生成</div>
+
+  <h2>标准尺寸 42×58（手牌）</h2>
+  <div class="row" id="row-normal"></div>
+
+  <h2>弃牌 / 副露尺寸 26×36（游戏内实际大小，桌面端）</h2>
+  <div class="row mini-row" id="row-discard"></div>
+
+  <h2>小尺寸 22×30（.tile.mini 基准档）</h2>
+  <div class="row mini-row" id="row-mini"></div>
+
+  <h2>同比例放大 84×116</h2>
+  <div class="row" id="row-big"></div>
+
+<script>
+const CONFIG = (function(){
+  return {
+    BASE_POINT: 5,                       // 每花基础分
+    WINDS: ['东','南','西','北'],
+    HONOR: { z1:'东', z2:'南', z3:'西', z4:'北', z5:'中', z6:'發', z7:'白' },
+    FLOWER: { f1:'春', f2:'夏', f3:'秋', f4:'冬', f5:'梅', f6:'蘭', f7:'竹', f8:'菊' },
+    // 底花（连底）
+    PATTERN: { menqing:4, qidui:10, pengpeng:6, qingyise:8, hunyise:6, shisanfeng:13 },
+    PATTERN_NAME: { menqing:'门清', qidui:'七对子', pengpeng:'碰碰胡', qingyise:'清一色', hunyise:'混一色', shisanfeng:'十三风(全风板)' },
+  };
+})();
+
+/* ============================ 模块2：TileUtils ============================ */
+const TileUtils = (function(){
+  const SUITS = ['m','p','s'];
+  function rank(t){ return parseInt(t.slice(1),10); }
+  function suit(t){ return t[0]; }
+  function isHonor(t){ return t[0]==='z'; }
+  function isFlower(t){ return t[0]==='f'; }
+  function isWind(t){ return t[0]==='z' && t[1]>='1' && t[1]<='4'; }
+  function isDragon(t){ return t[0]==='z' && t[1]>='5' && t[1]<='7'; }
+  function name(t){
+    if (isFlower(t)) return CONFIG.FLOWER[t];
+    if (isHonor(t)) return CONFIG.HONOR[t];
+    return rank(t)+({m:'万',p:'饼',s:'条'})[t[0]];
+  }
+  function sortKey(t){
+    const so={m:0,p:1,s:2,z:3,f:4}[t[0]];
+    return so*10+rank(t);
+  }
+  function sortHand(hand){ hand.sort((a,b)=>sortKey(a)-sortKey(b)); return hand; }
+  // 全部牌（含花牌，共 144）
+  function fullTileSet(){
+    const arr=[];
+    for (const s of SUITS) for (let r=1;r<=9;r++) for (let k=0;k<4;k++) arr.push(s+r);
+    for (let r=1;r<=7;r++) for (let k=0;k<4;k++) arr.push('z'+r);
+    for (let r=1;r<=8;r++) arr.push('f'+r);
+    return arr;
+  }
+  return { rank, suit, isHonor, isFlower, isWind, isDragon, name, sortKey, sortHand, fullTileSet };
+})();
+
+/* ============================ 模块2.5：TileArt（矢量牌面） ============================
+   用 SVG 画出真实麻将牌的刻纹：
+     · 饼(筒)：同心圆点阵，按传统布局排布（3 斜排 / 7 为 3+2+2 / 9 为九宫）
+     · 条(索)：竹节图形，1 条画雀鸟
+     · 万：上方汉数字 + 下方红色「萬」
+     · 字牌：東南西北中發白（白板为刻空方框）
+     · 花牌：春夏秋冬梅蘭竹菊
+   viewBox 统一 100×138，与牌面 42×58 同比例，任意尺寸缩放不失真。
+=================================================================================== */
+const TileArt = (function(){
+  const VB='0 0 100 138';
+  const T=TileUtils, CONF=CONFIG;
+  // 注意：字体名用单引号，因为要放进双引号包裹的 HTML 属性里；用 JSON.stringify 会转义成 \" 导致 CSS 失效
+  const SERIF = "'Songti SC','SimSun','STSong','Noto Serif CJK SC','Source Han Serif SC',serif";
+  const F = 'font-family="' + SERIF + '"';
+
+  const COLOR = {
+    dotRing:'#2759a8', dotCore:'#c0392b',
+    bamboo:'#1f7a45', bambooNode:'#c0392b', birdBrown:'#b5651d',
+    manNum:'#1b3b6f', manWan:'#c0392b',
+    wind:'#1b3b6f', red:'#c0392b', green:'#1e7d44', whiteFrame:'#2759a8',
+    flower:'#c2185b'
+  };
+
+  /* ---------- 饼（筒）：同心圆点阵 ---------- */
+  const DOT_LAYOUT = {
+    1:{r:21, pts:[[50,69]]},
+    2:{r:16.5,pts:[[50,40],[50,98]]},
+    3:{r:14.5,pts:[[24,101],[50,69],[76,37]]},
+    4:{r:14.5,pts:[[31,41],[69,41],[31,97],[69,97]]},
+    5:{r:13.5,pts:[[31,40],[69,40],[50,69],[31,98],[69,98]]},
+    6:{r:13,  pts:[[31,33],[69,33],[31,69],[69,69],[31,105],[69,105]]},
+    7:{r:12,  pts:[[26,30],[50,30],[74,30],[31,73],[69,73],[31,113],[69,113]]},
+    8:{r:11.5,pts:[[31,29],[69,29],[31,57],[69,57],[31,86],[69,86],[31,114],[69,114]]},
+    9:{r:11.5,pts:[[25,32],[50,32],[75,32],[25,69],[50,69],[75,69],[25,106],[50,106],[75,106]]}
+  };
+  function dotsSvg(n){
+    const L=DOT_LAYOUT[n]; if(!L) return '';
+    return L.pts.map(function(p){
+      const r=L.r;
+      return `<circle cx="${p[0]}" cy="${p[1]}" r="${r}" fill="#fff" stroke="${COLOR.dotRing}" stroke-width="3"/>`+
+             `<circle cx="${p[0]}" cy="${p[1]}" r="${(r*0.44).toFixed(1)}" fill="${COLOR.dotCore}"/>`;
+    }).join('');
+  }
+
+  /* ---------- 条（索）：竹节 / 1 条为雀鸟 ----------
+     传统排布：7 条 = 顶行 1 条竖 + 中间 3 条斜 + 底行 3 条竖；
+               8 条 = 第一行 4 条竖 + 第二行 4 条斜（八根一眼可数，不会像 4×2 那样错看成两个大块） */
+  const A = 26;                       // 斜置角度
+  const BAMBOO_LAYOUT = {
+    2:{w:16,h:56, pts:[[36,69,0],[64,69,0]]},
+    3:{w:15,h:40, pts:[[50,36,0],[32,94,0],[68,94,0]]},
+    4:{w:15,h:40, pts:[[31,41,0],[69,41,0],[31,97,0],[69,97,0]]},
+    5:{w:13,h:36, pts:[[29,38,0],[71,38,0],[50,69,0],[29,100,0],[71,100,0]]},
+    6:{w:13,h:30, pts:[[31,32,0],[69,32,0],[31,69,0],[69,69,0],[31,106,0],[69,106,0]]},
+    7:{w:11,h:26, pts:[[50,28,0],[25,62,A],[50,62,A],[75,62,A],[25,110,0],[50,110,0],[75,110,0]]},
+    8:{w:11,h:26, pts:[[25,34,0],[42,34,0],[59,34,0],[76,34,0],
+                       [22,104,A],[39,104,A],[56,104,A],[73,104,A]]},
+    9:{w:11,h:26, pts:[[25,32,0],[50,32,0],[75,32,0],[25,69,0],[50,69,0],[75,69,0],[25,106,0],[50,106,0],[75,106,0]]}
+  };
+  function bambooUnit(cx,cy,w,h,deg){
+    const x=(cx-w/2).toFixed(1), y=(cy-h/2).toFixed(1), x2=(cx+w/2).toFixed(1);
+    const y1=(cy-h*0.20).toFixed(1), y2=(cy+h*0.20).toFixed(1);
+    const M=COLOR.bamboo, sw=Math.max(2, Math.min(w,h)*0.16).toFixed(2);
+    const inner=`<g>`+
+      `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="${(w/2).toFixed(1)}" fill="#fff" stroke="${M}" stroke-width="${sw}"/>`+
+      `<line x1="${x}" y1="${y1}" x2="${x2}" y2="${y1}" stroke="${M}" stroke-width="${(sw*0.8).toFixed(2)}"/>`+
+      `<line x1="${x}" y1="${y2}" x2="${x2}" y2="${y2}" stroke="${M}" stroke-width="${(sw*0.8).toFixed(2)}"/>`+
+      `</g>`;
+    if (!deg) return inner;
+    // 斜置：绕自身中心旋转
+    return `<g transform="rotate(${deg} ${cx} ${cy})">${inner}</g>`;
+  }
+  function birdSvg(){
+    const g=COLOR.bamboo, r=COLOR.bambooNode, b=COLOR.birdBrown;
+    return `<g>`+
+      // 身体
+      `<path d="M38 44 C46 34 57 36 60 48 C64 62 57 80 47 84 C37 87 30 81 30 70 C30 60 32 51 38 44 Z" fill="${g}"/>`+
+      // 头 + 眼 + 喙
+      `<circle cx="35" cy="41" r="8.5" fill="${g}"/>`+
+      `<circle cx="32.5" cy="39" r="1.9" fill="#fff"/>`+
+      `<path d="M26.5 41 L17 44.5 L26.5 48 Z" fill="${r}"/>`+
+      // 翅
+      `<path d="M45 57 C55 53 63 57 67 64" stroke="#fff" stroke-width="3.2" fill="none" stroke-linecap="round" opacity=".9"/>`+
+      // 尾羽
+      `<path d="M52 80 C60 85 66 92 68 101" stroke="${g}" stroke-width="3.6" fill="none" stroke-linecap="round"/>`+
+      `<path d="M55 85 C65 89 71 96 73 105" stroke="${g}" stroke-width="2.6" fill="none" stroke-linecap="round" opacity=".65"/>`+
+      // 腿 + 枝
+      `<path d="M42 83 L40 98 M50 83 L53 98" stroke="${b}" stroke-width="2.4" stroke-linecap="round"/>`+
+      `<path d="M35 98 L57 98" stroke="${b}" stroke-width="2.2" stroke-linecap="round"/>`+
+      `</g>`;
+  }
+  function bambooSvg(n){
+    if (n===1) return birdSvg();
+    const L=BAMBOO_LAYOUT[n]; if(!L) return '';
+    return L.pts.map(function(p){ return bambooUnit(p[0],p[1],L.w,L.h,p[2]); }).join('');
+  }
+
+  /* ---------- 万：汉数字 + 萬 ---------- */
+  const CN_NUM=['','一','二','三','四','五','六','七','八','九'];
+  function manSvg(n){
+    return `<text x="50" y="60" text-anchor="middle" ${F} font-size="38" font-weight="700" fill="${COLOR.manNum}">${CN_NUM[n]}</text>`+
+           `<text x="50" y="118" text-anchor="middle" ${F} font-size="38" font-weight="700" fill="${COLOR.manWan}">萬</text>`;
+  }
+
+  /* ---------- 字牌 ---------- */
+  const HONOR_FACE={ z1:['東',COLOR.wind], z2:['南',COLOR.wind], z3:['西',COLOR.wind], z4:['北',COLOR.wind],
+                     z5:['中',COLOR.red],  z6:['發',COLOR.green] };
+  function honorSvg(tile){
+    const f=HONOR_FACE[tile];
+    if (f) return `<text x="50" y="92" text-anchor="middle" ${F} font-size="56" font-weight="700" fill="${f[1]}">${f[0]}</text>`;
+    // 白板：刻空方框
+    return `<rect x="25" y="26" width="50" height="86" rx="5" fill="none" stroke="${COLOR.whiteFrame}" stroke-width="4"/>`+
+           `<rect x="31" y="32" width="38" height="74" rx="3" fill="none" stroke="${COLOR.whiteFrame}" stroke-width="1.4" opacity=".45"/>`;
+  }
+
+  /* ---------- 花牌 ---------- */
+  function flowerSvg(ch){
+    return `<rect x="16" y="18" width="68" height="102" rx="7" fill="none" stroke="${COLOR.flower}" stroke-width="2.2" opacity=".45"/>`+
+           `<text x="50" y="86" text-anchor="middle" ${F} font-size="44" font-weight="700" fill="${COLOR.flower}">${ch}</text>`;
+  }
+
+  /* ---------- 对外接口 ---------- */
+  function faceSVG(tile){
+    if (T.isFlower(tile)) return flowerSvg(CONF.FLOWER[tile]);
+    if (T.isHonor(tile))  return honorSvg(tile);
+    const r=T.rank(tile), s=tile[0];
+    if (s==='m') return manSvg(r);
+    if (s==='p') return dotsSvg(r);
+    return bambooSvg(r);
+  }
+  function faceHTML(tile){
+    return `<svg viewBox="${VB}" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg">${faceSVG(tile)}</svg>`;
+  }
+  return { faceHTML };
+})();
+
+var TILES = ["m1","m2","m3","m4","m5","m6","m7","m8","m9","p1","p2","p3","p4","p5","p6","p7","p8","p9","s1","s2","s3","s4","s5","s6","s7","s8","s9","z1","z2","z3","z4","z5","z6","z7","f1","f2","f3","f4","f5","f6","f7","f8"];
+
+function fill(id, cls, style){
+  var box = document.getElementById(id);
+  TILES.forEach(function(t){
+    var el = document.createElement('div');
+    el.className = 'tile ' + (TileUtils.isFlower(t)?'f':TileUtils.isHonor(t)?'z':t[0]) + ' ' + cls;
+    if (style) el.setAttribute('style', style);
+    el.innerHTML = '<div class="face">' + TileArt.faceHTML(t) + '</div>';
+    box.appendChild(el);
+  });
+}
+fill('row-normal', '');
+fill('row-discard', 'mini', 'width:26px;height:36px');
+fill('row-mini', 'mini');
+fill('row-big', '', 'width:84px;height:116px');
+</script>
+</body>
+</html>
